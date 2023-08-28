@@ -33,7 +33,7 @@ from vlnce_baselines.common.utils import extract_instruction_tokens
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
-    import tensorflow as tf  # noqa: F401
+    # import tensorflow as tf  # noqa: F401
 
 
 class BaseVLNCETrainer(BaseILTrainer):
@@ -305,7 +305,7 @@ class BaseVLNCETrainer(BaseILTrainer):
             " [Time elapsed (s): {time}]"
         )
         start_time = time.time()
-
+        print("NUM ENVS:", envs.num_envs)
         while envs.num_envs > 0 and len(stats_episodes) < episodes_to_eval:
             current_episodes = envs.current_episodes()
 

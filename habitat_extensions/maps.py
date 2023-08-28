@@ -295,6 +295,6 @@ def draw_mp3d_nodes(
                 pos[2], pos[0], img.shape[0:2], sim
             )
 
-        # only paint if over a valid point
-        if img[r_x, r_y]:
-            drawpoint(img, (r_x, r_y), MAP_MP3D_WAYPOINT, meters_per_px)
+            # only paint if over a valid point
+            if img[r_x, r_y]:
+                drawpoint(img, (r_x, r_y), MAP_MP3D_WAYPOINT, meters_per_px)

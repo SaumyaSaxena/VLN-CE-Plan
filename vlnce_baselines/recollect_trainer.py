@@ -2,6 +2,7 @@ import os
 import time
 import warnings
 from typing import List
+import datetime
 
 import torch
 import tqdm
@@ -22,7 +23,7 @@ from vlnce_baselines.dagger_trainer import collate_fn
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
-    import tensorflow as tf  # noqa: F401
+    # import tensorflow as tf  # noqa: F401
 
 
 @baseline_registry.register_trainer(name="recollect_trainer")
@@ -47,7 +48,7 @@ class RecollectTrainer(BaseVLNCETrainer):
         if self.config.EVAL.SAVE_RESULTS:
             self._make_results_dir()
 
-    def save_checkpoint(self, epoch: int, step_id: int) -> None:
+    def save_checkpoint(self, epoch: int, step_id: int, ckpt_save_dir) -> None:
         torch.save(
             obj={
                 "state_dict": self.policy.state_dict(),
@@ -56,7 +57,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                 "epoch": epoch,
                 "step_id": step_id,
             },
-            f=os.path.join(self.config.CHECKPOINT_FOLDER, f"ckpt.{epoch}.pth"),
+            f=os.path.join(ckpt_save_dir, f"ckpt.{epoch}.pth"),
         )
 
     def train(self) -> None:
@@ -103,8 +104,17 @@ class RecollectTrainer(BaseVLNCETrainer):
                 " should be a multiple of batch_size."
             )
 
+        current_time = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+        tb_dir = f'{self.config.TENSORBOARD_DIR}/{current_time}'
+        if not os.path.exists(tb_dir):
+            os.makedirs(tb_dir)
+        
+        ckpt_save_dir = f'{self.config.CHECKPOINT_FOLDER}/{current_time}' 
+        if not os.path.exists(ckpt_save_dir):
+            os.makedirs(ckpt_save_dir)
+
         with TensorboardWriter(
-            self.config.TENSORBOARD_DIR,
+            tb_dir,
             flush_secs=self.flush_secs,
             purge_step=0,
         ) as writer:
@@ -212,7 +222,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                     writer.add_scalar("aux_loss", aux_loss, self.step_id)
                     self.step_id += 1  # noqa: SIM113
 
-                self.save_checkpoint(epoch, self.step_id)
+                self.save_checkpoint(epoch, self.step_id, ckpt_save_dir)
 
             AuxLosses.deactivate()
             dataset.close_sims()
