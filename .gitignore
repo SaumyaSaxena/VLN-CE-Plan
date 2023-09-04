@@ -133,6 +133,8 @@ dmypy.json
 
 # exclude data from source control by default
 data
+logs
+outputs
 
 # VSCode
 .vscode

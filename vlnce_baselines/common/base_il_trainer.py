@@ -22,7 +22,7 @@ from habitat_baselines.common.obs_transformers import (
 )
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.rl.ddppo.algo.ddp_utils import is_slurm_batch_job
-from habitat_baselines.utils.common import batch_obs
+from habitat_baselines.utils.common import batch_obs, get_checkpoint_id, poll_checkpoint_folder
 
 from habitat_extensions.utils import generate_video, observations_to_image
 from vlnce_baselines.common.aux_losses import AuxLosses
@@ -31,7 +31,7 @@ from vlnce_baselines.common.utils import extract_instruction_tokens
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
-    import tensorflow as tf  # noqa: F401
+    # import tensorflow as tf  # noqa: F401
 
 
 class BaseVLNCETrainer(BaseILTrainer):
@@ -216,6 +216,64 @@ class BaseVLNCETrainer(BaseILTrainer):
             rgb_frames,
         )
 
+    def eval(self) -> None:
+        r"""Main method of trainer evaluation. Calls _eval_checkpoint() that
+        is specified in Trainer class that inherits from BaseRLTrainer
+        or BaseILTrainer
+
+        Returns:
+            None
+        """
+        self.device = (
+            torch.device("cuda", self.config.TORCH_GPU_ID)
+            if torch.cuda.is_available()
+            else torch.device("cpu")
+        )
+
+        assert (
+            len(self.config.EVAL.EVAL_LOG_DIR) > 0
+        ), "Must specify a tensorboard directory for logging"
+        
+        tb_dir = f'{self.config.EVAL.EVAL_LOG_DIR}/tb_logs'
+        os.makedirs(tb_dir, exist_ok=True)
+        eval_dir = f'{self.config.EVAL.EVAL_LOG_DIR}/evals'
+        os.makedirs(eval_dir, exist_ok=True)
+
+        with TensorboardWriter(
+            tb_dir, flush_secs=self.flush_secs
+        ) as writer:
+            if os.path.isfile(self.config.EVAL.EVAL_CKPT_PATH_DIR):
+                # evaluate singe checkpoint
+                proposed_index = get_checkpoint_id(
+                    self.config.EVAL.EVAL_CKPT_PATH_DIR
+                )
+                if proposed_index is not None:
+                    ckpt_idx = proposed_index
+                else:
+                    ckpt_idx = 0
+                self._eval_checkpoint(
+                    self.config.EVAL.EVAL_CKPT_PATH_DIR,
+                    writer,
+                    checkpoint_index=ckpt_idx,
+                )
+            else:
+                # evaluate multiple checkpoints in order
+                prev_ckpt_ind = -1
+                while True:
+                    current_ckpt = None
+                    while current_ckpt is None:
+                        current_ckpt = poll_checkpoint_folder(
+                            self.config.EVAL.EVAL_CKPT_PATH_DIR, prev_ckpt_ind
+                        )
+                        time.sleep(2)  # sleep for 2 secs before polling again
+                    logger.info(f"=======current_ckpt: {current_ckpt}=======")
+                    prev_ckpt_ind += 1
+                    self._eval_checkpoint(
+                        checkpoint_path=current_ckpt,
+                        writer=writer,
+                        checkpoint_index=prev_ckpt_ind,
+                    )
+
     def _eval_checkpoint(
         self,
         checkpoint_path: str,
@@ -250,14 +308,18 @@ class BaseVLNCETrainer(BaseILTrainer):
         config.IL.ckpt_to_load = checkpoint_path
         config.use_pbar = not is_slurm_batch_job()
 
-        if len(config.VIDEO_OPTION) > 0:
+        eval_dir = f'{config.EVAL.EVAL_LOG_DIR}/evals'
+
+        if config.EVAL.SAVE_VIDEO:
+            video_dir = f'{eval_dir}/videos_ckpt{checkpoint_index}'
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
 
         config.freeze()
 
         if config.EVAL.SAVE_RESULTS:
+            
             fname = os.path.join(
-                config.RESULTS_DIR,
+                eval_dir,
                 f"stats_ckpt_{checkpoint_index}_{split}.json",
             )
             if os.path.exists(fname):
@@ -300,8 +362,6 @@ class BaseVLNCETrainer(BaseILTrainer):
         stats_episodes = {}
 
         rgb_frames = [[] for _ in range(envs.num_envs)]
-        if len(config.VIDEO_OPTION) > 0:
-            os.makedirs(config.VIDEO_DIR, exist_ok=True)
 
         num_eps = sum(envs.number_of_episodes)
         if config.EVAL.EPISODE_COUNT > -1:
@@ -339,7 +399,7 @@ class BaseVLNCETrainer(BaseILTrainer):
 
             # reset envs and observations if necessary
             for i in range(envs.num_envs):
-                if len(config.VIDEO_OPTION) > 0:
+                if config.EVAL.SAVE_VIDEO:
                     frame = observations_to_image(observations[i], infos[i])
                     frame = append_text_to_image(
                         frame, current_episodes[i].instruction.instruction_text
@@ -365,10 +425,10 @@ class BaseVLNCETrainer(BaseILTrainer):
                         )
                     )
 
-                if len(config.VIDEO_OPTION) > 0:
+                if config.EVAL.SAVE_VIDEO:
                     generate_video(
-                        video_option=config.VIDEO_OPTION,
-                        video_dir=config.VIDEO_DIR,
+                        video_option=config.EVAL.VIDEO_SAVE_LOC,
+                        video_dir=video_dir,
                         images=rgb_frames[i],
                         episode_id=ep_id,
                         checkpoint_idx=checkpoint_index,
