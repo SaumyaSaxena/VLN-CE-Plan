@@ -24,7 +24,7 @@ from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.rl.ddppo.algo.ddp_utils import is_slurm_batch_job
 from habitat_baselines.utils.common import batch_obs, get_checkpoint_id, poll_checkpoint_folder
 
-from habitat_extensions.utils import generate_video, observations_to_image
+from habitat_extensions.utils import generate_video, observations_to_image, text_to_append
 from vlnce_baselines.common.aux_losses import AuxLosses
 from vlnce_baselines.common.env_utils import construct_envs_auto_reset_false
 from vlnce_baselines.common.utils import extract_instruction_tokens
@@ -216,6 +216,43 @@ class BaseVLNCETrainer(BaseILTrainer):
             rgb_frames,
         )
 
+    def _setup_eval_config(self, checkpoint_config: Config) -> Config:
+        r"""Sets up and returns a merged config for evaluation. Config
+            object saved from checkpoint is merged into config file specified
+            at evaluation time with the following overwrite priority:
+                  eval_opts > ckpt_opts > ckpt_cfg > eval_cfg
+            Evaluation should be done based on the training config (ckpt_cfg) and only EVAL cfg settings should be updated
+            If the saved config is outdated, only the eval config is returned.
+
+        Args:
+            checkpoint_config: saved config from checkpoint.
+
+        Returns:
+            Config: merged config for eval.
+        """
+
+        config = self.config.clone()
+        ckpt_cmd_opts = checkpoint_config.get('CMD_TRAILING_OPTS', [])
+        eval_cmd_opts = config.CMD_TRAILING_OPTS
+        eval_config = Config({'EVAL': config.EVAL})
+
+        try:
+            # config.merge_from_other_cfg(self.config)
+            config.merge_from_other_cfg(checkpoint_config['config']) # Evaluation should be done based on the training config
+            config.merge_from_other_cfg(eval_config) # EVAL cfg settings should be updated
+            config.merge_from_list(ckpt_cmd_opts)
+            config.merge_from_list(eval_cmd_opts)
+        except KeyError:
+            logger.info("Saved config is outdated, using solely eval config")
+            config = self.config.clone()
+            config.merge_from_list(eval_cmd_opts)
+        config.defrost()
+
+        config.TASK_CONFIG.SIMULATOR.AGENT_0.SENSORS = self.config.SENSORS
+        config.freeze()
+
+        return config
+        
     def eval(self) -> None:
         r"""Main method of trainer evaluation. Calls _eval_checkpoint() that
         is specified in Trainer class that inherits from BaseRLTrainer
@@ -295,7 +332,6 @@ class BaseVLNCETrainer(BaseILTrainer):
             config = self._setup_eval_config(ckpt)
 
         split = config.EVAL.SPLIT
-
         config.defrost()
         config.TASK_CONFIG.DATASET.SPLIT = split
         config.TASK_CONFIG.DATASET.ROLES = ["guide"]
@@ -311,6 +347,9 @@ class BaseVLNCETrainer(BaseILTrainer):
         eval_dir = f'{config.EVAL.EVAL_LOG_DIR}/evals'
 
         if config.EVAL.SAVE_VIDEO:
+            assert (
+                len(config.EVAL.VIDEO_SAVE_LOC) > 0
+            ), "Must specify a video save location "
             video_dir = f'{eval_dir}/videos_ckpt{checkpoint_index}'
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
 
@@ -340,6 +379,7 @@ class BaseVLNCETrainer(BaseILTrainer):
         self.policy.eval()
 
         observations = envs.reset()
+
         observations = extract_instruction_tokens(
             observations, self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID
         )
@@ -401,9 +441,8 @@ class BaseVLNCETrainer(BaseILTrainer):
             for i in range(envs.num_envs):
                 if config.EVAL.SAVE_VIDEO:
                     frame = observations_to_image(observations[i], infos[i])
-                    frame = append_text_to_image(
-                        frame, current_episodes[i].instruction.instruction_text
-                    )
+                    _text = text_to_append(current_episodes[i].instruction)
+                    frame = append_text_to_image(frame, _text)
                     rgb_frames[i].append(frame)
 
                 if not dones[i]:

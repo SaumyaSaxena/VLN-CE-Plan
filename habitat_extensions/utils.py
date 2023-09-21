@@ -23,6 +23,12 @@ from habitat_extensions import maps
 
 cv2 = try_cv2_import()
 
+def text_to_append(instruction):
+    if instruction.high_level_instruction is None:
+        return instruction.instruction_text
+    else:
+        text = instruction.instruction_text + f'\n High level Instruction: {instruction.high_level_instruction}'
+        return text
 
 def observations_to_image(
     observation: Dict[str, Any], info: Dict[str, Any]

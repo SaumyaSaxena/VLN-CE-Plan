@@ -1,0 +1,32 @@
+#BSUB -J rxr_train_hl             # job name
+#BSUB -o /home/%u/Projects/VLN-CE-Plan/logs/train/job.%j.out   # optional: have output written to specific file
+#BSUB -e /home/%u/Projects/VLN-CE-Plan/logs/train/job.%j.err   # optional: have errors written to specific file
+#BSUB -gpu "num=1"
+#BSUB -q batch_a100               # optional: use highend nodes w/ Volta GPUs (default: Geforce GPUs)
+#BSUB -n 8                          # min CPU cores,max CPU cores (max cores is optional)
+#BSUB -u sax1rng
+
+#BSUB -B                            # receive email when job starts
+#BSUB -N                            # receive email when job ends
+
+#BSUB -W 72:00                       # fill in desired wallclock time [hours,]minutes (hours are optional)
+#BSUB -M 32768                       # fill in required amount of memory per CPU core(in Mbyte)
+
+#BSUB -R "span[hosts=1]"          # optional: run on single host (if using more than 1 CPU core)
+# #BSUB -R "span[ptile=28]"         # optional: fill in to specify cores per node (max 28-40 depending on node type)
+
+umask 077
+umask g+rwx
+. /fs/applications/lsf/latest/conf/profile.lsf  # this line is needed
+. /fs/applications/modules/current/init/bash    # this line is neeed
+
+set -e # exit on any error
+
+module load conda
+conda activate venv_rxr
+
+nvidia-smi
+cd /home/sax1rng/Projects/VLN-CE-Plan
+python run.py --exp-config vlnce_baselines/config/rxr_baselines/rxr_cma_en.yaml --run-type train
+
+set +e

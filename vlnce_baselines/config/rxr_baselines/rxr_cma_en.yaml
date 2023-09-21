@@ -1,6 +1,6 @@
 BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_task.yaml
 TRAINER_NAME: recollect_trainer
-SIMULATOR_GPU_IDS: [0, 1]
+SIMULATOR_GPU_IDS: [0]
 TORCH_GPU_ID: 0
 NUM_ENVIRONMENTS: 1
 TENSORBOARD_DIR: outputs/rxr_cma_en
@@ -16,16 +16,16 @@ INFERENCE:
   FORMAT: rxr
 
 EVAL:
-  USE_CKPT_CONFIG: False
+  USE_CKPT_CONFIG: True
   SPLIT: val_unseen
   LANGUAGES: [en-US, en-IN]
   EPISODE_COUNT: -1
   SAMPLE: True
-  EVAL_CKPT_PATH_DIR: outputs/rxr_cma_en/pretrained/checkpoints/RxR-en-CMA.pth # If this is a directory, evaluate all checkpoints. Else evaluate the specified checkpoint.pth
-  EVAL_LOG_DIR: outputs/rxr_cma_en/pretrained
+  EVAL_CKPT_PATH_DIR: outputs/rxr_cma_en/2023_09_16-13_25_20/checkpoints/ckpt.7.pth # If this is a directory, evaluate all checkpoints. Else evaluate the specified checkpoint.pth
+  EVAL_LOG_DIR: outputs/rxr_cma_en/2023_09_16-13_25_20
   SAVE_VIDEO: False
   VIDEO_SAVE_FREQ: 500
-  VIDEO_SAVE_LOC: [] # options: "disk", "tensorboard"
+  VIDEO_SAVE_LOC: ['disk'] # options: "disk", "tensorboard"
   SAVE_RESULTS: True
 
 RL:

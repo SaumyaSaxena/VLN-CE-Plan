@@ -21,6 +21,7 @@ ALL_EPISODES_MASK = "*"
 @attr.s(auto_attribs=True)
 class ExtendedInstructionData:
     instruction_text: str = attr.ib(default=None, validator=not_none_validator)
+    high_level_instruction: str = attr.ib(default=None)
     instruction_id: Optional[str] = attr.ib(default=None)
     language: Optional[str] = attr.ib(default=None)
     annotator_id: Optional[str] = attr.ib(default=None)
@@ -177,7 +178,6 @@ class RxRVLNCEDatasetV1(Dataset):
 
         for episode in deserialized["episodes"]:
             episode = VLNExtendedEpisode(**episode)
-
             if scenes_dir is not None:
                 if episode.scene_id.startswith(DEFAULT_SCENE_PATH_PREFIX):
                     episode.scene_id = episode.scene_id[
@@ -185,10 +185,12 @@ class RxRVLNCEDatasetV1(Dataset):
                     ]
 
                 episode.scene_id = os.path.join(scenes_dir, episode.scene_id)
-
-            episode.instruction = ExtendedInstructionData(
-                **episode.instruction
-            )
+            try:
+                episode.instruction = ExtendedInstructionData(
+                    **episode.instruction
+                )
+            except:
+                import ipdb; ipdb.set_trace()
             episode.instruction.split = self.config.SPLIT
             if episode.goals is not None:
                 for g_index, goal in enumerate(episode.goals):
