@@ -69,6 +69,9 @@ class RecollectTrainer(BaseVLNCETrainer):
         self.config.IL.RECOLLECT_TRAINER.gt_path = (
             self.config.TASK_CONFIG.TASK.NDTW.GT_PATH
         )
+        self.config.IL.RECOLLECT_TRAINER.gt_file = (
+            self.config.TASK_CONFIG.TASK.NDTW.GT_PATH
+        )
         self.config.use_pbar = not is_slurm_batch_job()
         self.config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.MAX_SCENE_REPEAT_STEPS = (
             -1
@@ -87,7 +90,6 @@ class RecollectTrainer(BaseVLNCETrainer):
                 num_workers=1,
             )
         )
-
         self._initialize_policy(
             self.config,
             self.config.IL.load_from_ckpt,
