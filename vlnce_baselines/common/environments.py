@@ -29,7 +29,13 @@ class VLNCEDaggerEnv(habitat.RLEnv):
         return self._env.episode_over
 
     def get_info(self, observations: Observations) -> Dict[Any, Any]:
-        return self.habitat_env.get_metrics()
+        metrics = self.habitat_env.get_metrics()
+        agent_state = self._env.sim.get_agent_state()
+        metrics['agent_position'] = agent_state.position.tolist()
+        metrics['agent_rotation'] = agent_state.rotation
+        metrics['world_time'] = self._env.sim.get_world_time()
+        # metrics['physics_time_step'] = self._env.sim.get_physics_time_step()
+        return metrics
 
 
 @baseline_registry.register_env(name="VLNCEInferenceEnv")
