@@ -92,9 +92,7 @@ if __name__== "__main__":
     while not done:
         print(f'batch:{n_batch}/{n_episodes/batch_size}')
         batch_end = min(n_episodes,(n_batch+1)*batch_size)
-        if batch_end == n_episodes:
-            done=True
-            print("DONE SAVING ALL HIGH LEVEL INSTRUCTIONS!!")
+
         batch_idx = en_idx[n_batch*batch_size:batch_end]
 
         output_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/high_level_instr/{data_type}_guide_high_level_instr_{n_batch}.json.gz'
@@ -117,5 +115,8 @@ if __name__== "__main__":
             with gzip.open(output_file, "wt") as f:
                 f.write(json.dumps(new_data))
             print("Output file saved at ", output_file)
-        
+            
+        if batch_end == n_episodes:
+            done=True
+            print("DONE SAVING ALL HIGH LEVEL INSTRUCTIONS!!")
         n_batch += 1

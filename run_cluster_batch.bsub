@@ -1,4 +1,4 @@
-#BSUB -J rxr_train_hl             # job name
+#BSUB -J rxr_train_subtasks             # job name
 #BSUB -o /home/%u/Projects/VLN-CE-Plan/logs/train/job.%j.out   # optional: have output written to specific file
 #BSUB -e /home/%u/Projects/VLN-CE-Plan/logs/train/job.%j.err   # optional: have errors written to specific file
 #BSUB -gpu "num=1"
@@ -27,6 +27,6 @@ conda activate venv_rxr
 
 nvidia-smi
 cd /home/sax1rng/Projects/VLN-CE-Plan
-python run.py --exp-config vlnce_baselines/config/rxr_baselines/rxr_cma_en.yaml --run-type train
+python run.py --exp-config vlnce_baselines/config/rxr_baselines/rxr_cma_en_subtasks.yaml --run-type train
 
 set +e
