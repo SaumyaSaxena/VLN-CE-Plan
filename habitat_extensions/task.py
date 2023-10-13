@@ -129,7 +129,8 @@ class RxRVLNCEDatasetV1(Dataset):
 
     episodes: List[VLNEpisode]
     instruction_vocab: VocabDict
-    annotation_roles: List[str] = ["guide", "follower"]
+    # annotation_roles: List[str] = ["guide", "follower"]
+    annotation_roles: List[str] = ["guide"]
     languages: List[str] = ["en-US", "en-IN", "hi-IN", "te-IN"]
 
     def __init__(self, config: Optional[Config] = None) -> None:
