@@ -27,7 +27,7 @@ def text_to_append(instruction):
     if instruction.high_level_instruction is None:
         return instruction.instruction_text
     else:
-        text = instruction.instruction_text + f'\n High level Instruction: {instruction.high_level_instruction}'
+        text = instruction.instruction_text + f'High level Instruction: {instruction.high_level_instruction}'
         return text
 
 def observations_to_image(
