@@ -471,7 +471,7 @@ class BaseVLNCETrainer(BaseILTrainer):
                         images=rgb_frames[i],
                         episode_id=ep_id,
                         checkpoint_idx=checkpoint_index,
-                        metrics={"spl": stats_episodes[ep_id]["spl"]},
+                        metrics={"spl": stats_episodes[ep_id]["spl_rxr"]},
                         tb_writer=writer,
                     )
                     del stats_episodes[ep_id]["top_down_map_vlnce"]

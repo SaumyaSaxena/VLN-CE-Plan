@@ -333,7 +333,7 @@ def rollout_episodes(envs, trajectories, config, tstamp_gtdata_idxs, tstamp_pose
                         images=rgb_frames[i],
                         episode_id=prev_eps[i].episode_id,
                         checkpoint_idx=0,
-                        metrics={"spl": infos[i]["spl"]},
+                        metrics={"spl": infos[i]["spl_rxr"]},
                         tb_writer=None,
                         fps=2,
                     )

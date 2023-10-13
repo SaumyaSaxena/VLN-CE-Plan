@@ -89,6 +89,11 @@ _C.TASK.ORACLE_NAVIGATION_ERROR.TYPE = "OracleNavigationError"
 _C.TASK.ORACLE_SUCCESS = CN()
 _C.TASK.ORACLE_SUCCESS.TYPE = "OracleSuccess"
 _C.TASK.ORACLE_SUCCESS.SUCCESS_DISTANCE = 3.0
+# -----------------------------------------------------------------------------
+# SPL_RxR MEASUREMENT
+# -----------------------------------------------------------------------------
+_C.TASK.SPL_RxR = CN()
+_C.TASK.SPL_RxR.TYPE = "SPLRxR"
 # ----------------------------------------------------------------------------
 # ORACLE_SPL MEASUREMENT
 # ----------------------------------------------------------------------------

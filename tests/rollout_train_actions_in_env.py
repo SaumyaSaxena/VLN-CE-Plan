@@ -205,7 +205,7 @@ if __name__== "__main__":
                         images=rgb_frames[i],
                         episode_id=current_episodes[i].episode_id,
                         checkpoint_idx=0,
-                        metrics={"spl": infos[i]["spl"]},
+                        metrics={"spl": infos[i]["spl_rxr"]},
                         tb_writer=None,
                     )
 

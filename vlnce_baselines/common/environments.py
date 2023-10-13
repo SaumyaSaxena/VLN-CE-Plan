@@ -196,7 +196,7 @@ class VLNCEWaypointEnvDiscretized(VLNCEWaypointEnv):
                 images=self.video_frames,
                 episode_id=self._env.current_episode.episode_id,
                 checkpoint_idx=0,
-                metrics={"SPL": round(info["spl"], 5)},
+                metrics={"spl": round(info["spl_rxr"], 5)},
                 tb_writer=None,
                 fps=8,
             )

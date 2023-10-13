@@ -40,7 +40,7 @@ TASK:
     DISTANCE_TO_GOAL,
     SUCCESS,
     ORACLE_SUCCESS,
-    SPL,
+    SPL_RxR,
     NDTW
   ]
 
