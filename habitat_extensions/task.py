@@ -186,12 +186,10 @@ class RxRVLNCEDatasetV1(Dataset):
                     ]
 
                 episode.scene_id = os.path.join(scenes_dir, episode.scene_id)
-            try:
-                episode.instruction = ExtendedInstructionData(
-                    **episode.instruction
-                )
-            except:
-                import ipdb; ipdb.set_trace()
+
+            episode.instruction = ExtendedInstructionData(
+                **episode.instruction
+            )
             episode.instruction.split = self.config.SPLIT
             if episode.goals is not None:
                 for g_index, goal in enumerate(episode.goals):

@@ -27,6 +27,6 @@ conda activate venv_rxr
 
 nvidia-smi
 cd /home/sax1rng/Projects/VLN-CE-Plan
-python run.py --exp-config vlnce_baselines/config/rxr_baselines/rxr_cma_en_subtasks.yaml --run-type train
+python run.py --exp-config vlnce_baselines/config/rxr_baselines/rxr_cma_en_hl_instr.yaml --run-type train
 
 set +e
