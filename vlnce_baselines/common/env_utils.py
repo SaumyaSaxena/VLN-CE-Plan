@@ -56,7 +56,7 @@ def construct_envs(
         if len(scenes) < num_envs and len(scenes) != 1:
             raise RuntimeError(
                 "reduce the number of GPUs or envs as there"
-                " aren't enough number of scenes"
+                f" aren't enough number of scenes {len(scenes)}/{num_envs}"
             )
 
         random.shuffle(scenes)

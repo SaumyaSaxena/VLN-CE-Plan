@@ -1,14 +1,17 @@
 import sys, os
-sys.path.append('/home/sax1rng/Projects/VLN-CE-Plan')
+cwd = os. getcwd()
+sys.path.append(f'{cwd}/../')
 
 from transformers import AutoTokenizer
 import transformers
-import torch, gzip, json
+import torch
+import gzip, json
 import time
 from tqdm import tqdm
 
+
 def load_data(data_type='train', role='guide'):
-    data_location = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}.json.gz'
+    data_location = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}.json.gz'
     data = {}
     with gzip.open(data_location,"rt",) as f:
         data.update(json.load(f))
@@ -54,8 +57,8 @@ def get_llama_sequence(instruction, llama2_tokenizer, llama2_pipeline):
 
 if __name__== "__main__":
     save_results = True
-    data_type = 'val_unseen'
-    role = 'follower'
+    data_type = 'train'
+    role = 'guide'
 
     llama2_tokenizer, llama2_pipeline = get_llama2_model()
 
@@ -66,11 +69,11 @@ if __name__== "__main__":
 
     batch_size = 100
     approx_total_batches = n_episodes/batch_size
-    n_batch=0
+    n_batch=147
     done = False
     while not done:
         start = time.time()
-        output_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/subtask_instructions/{data_type}_{role}_subtask_instructions_{n_batch}.json.gz'
+        output_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/subtask_instructions/{data_type}_{role}_subtask_instructions_{n_batch}.json.gz'
         
         if os.path.exists(output_file):
             print(f"Skipped batch {n_batch} since path exists")

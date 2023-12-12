@@ -9,6 +9,7 @@ import jsonlines
 import torch
 import torch.nn.functional as F
 import tqdm
+import numpy as np
 from gym import Space
 from habitat import Config, logger
 from habitat.utils.visualizations.utils import append_text_to_image
@@ -235,11 +236,15 @@ class BaseVLNCETrainer(BaseILTrainer):
         ckpt_cmd_opts = checkpoint_config.get('CMD_TRAILING_OPTS', [])
         eval_cmd_opts = config.CMD_TRAILING_OPTS
         eval_config = Config({'EVAL': config.EVAL})
+        eval_task_config = Config({'TASK_CONFIG': {'TASK': config.EVAL.EVAL_TASK}})
+        eval_common_conig = Config(config.EVAL.COMMON)
 
         try:
             # config.merge_from_other_cfg(self.config)
             config.merge_from_other_cfg(checkpoint_config['config']) # Evaluation should be done based on the training config
             config.merge_from_other_cfg(eval_config) # EVAL cfg settings should be updated
+            config.merge_from_other_cfg(eval_task_config) # EVAL_TASK cfg settings should be updated
+            config.merge_from_other_cfg(eval_common_conig) # EVAL_TASK cfg settings should be updated
             config.merge_from_list(ckpt_cmd_opts)
             config.merge_from_list(eval_cmd_opts)
         except KeyError:
@@ -350,7 +355,7 @@ class BaseVLNCETrainer(BaseILTrainer):
             assert (
                 len(config.EVAL.VIDEO_SAVE_LOC) > 0
             ), "Must specify a video save location "
-            video_dir = f'{eval_dir}/videos_ckpt{checkpoint_index}'
+            video_dir = f'{eval_dir}/videos_ckpt{checkpoint_index}/{split}_{config.TASK_CONFIG.TASK.SUCCESS_DISTANCE}'
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
 
         config.freeze()
@@ -359,7 +364,7 @@ class BaseVLNCETrainer(BaseILTrainer):
             
             fname = os.path.join(
                 eval_dir,
-                f"stats_ckpt_{checkpoint_index}_{split}.json",
+                f"stats_ckpt_{checkpoint_index}_{split}_SD{config.TASK_CONFIG.TASK.SUCCESS_DISTANCE}.json",
             )
             if os.path.exists(fname):
                 logger.info("skipping -- evaluation exists.")
@@ -415,6 +420,7 @@ class BaseVLNCETrainer(BaseILTrainer):
         )
         start_time = time.time()
 
+        actions_all_envs = [[] for _ in range(envs.num_envs)]
         while envs.num_envs > 0 and len(stats_episodes) < num_eps:
             current_episodes = envs.current_episodes()
 
@@ -444,13 +450,17 @@ class BaseVLNCETrainer(BaseILTrainer):
                     _text = text_to_append(current_episodes[i].instruction)
                     frame = append_text_to_image(frame, _text)
                     rgb_frames[i].append(frame)
+                    actions_all_envs[i].append(actions[i][0].item())
 
                 if not dones[i]:
                     continue
 
                 ep_id = current_episodes[i].episode_id
                 stats_episodes[ep_id] = infos[i]
-                observations[i] = envs.reset_at(i)[0]
+                try:
+                    observations[i] = envs.reset_at(i)[0]
+                except:
+                    import ipdb; ipdb.set_trace()
                 prev_actions[i] = torch.zeros(1, dtype=torch.long)
 
                 if config.use_pbar:
@@ -476,6 +486,7 @@ class BaseVLNCETrainer(BaseILTrainer):
                     )
                     del stats_episodes[ep_id]["top_down_map_vlnce"]
                     rgb_frames[i] = []
+                actions_all_envs = [[] for _ in range(envs.num_envs)]
 
             observations = extract_instruction_tokens(
                 observations,
@@ -515,9 +526,12 @@ class BaseVLNCETrainer(BaseILTrainer):
         aggregated_stats = {}
         num_episodes = len(stats_episodes)
         for k in next(iter(stats_episodes.values())).keys():
-            aggregated_stats[k] = (
-                sum(v[k] for v in stats_episodes.values()) / num_episodes
-            )
+            if k == 'agent_rotation' or k == 'agent_position':
+                continue
+            else:
+                aggregated_stats[k] = (
+                    np.sum(v[k] for v in stats_episodes.values()) / num_episodes
+                )
 
         if config.EVAL.SAVE_RESULTS:
             with open(fname, "w") as f:

@@ -35,7 +35,7 @@ def get_image():
     return image
 
 def get_video():
-    video_path = '/home/sax1rng/Projects/VLN-CE-Plan/outputs/rxr_cma_en/pretrained/evals/videos_ckpt0/episode=4639-ckpt=0-spl=1.00.mp4'
+    video_path = '/home/saumyas/Projects/VLN-CE-Plan/outputs/rxr_cma_en/pretrained/evals/videos_ckpt0/episode=4639-ckpt=0-spl=1.00.mp4'
     vid = imageio.get_reader(video_path,  'ffmpeg')
     
     for i, im in enumerate(vid):
