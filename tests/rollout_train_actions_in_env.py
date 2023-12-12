@@ -1,5 +1,6 @@
 import sys, os
-sys.path.append('/home/sax1rng/Projects/VLN-CE-Plan')
+cwd = os.getcwd()
+sys.path.append(f'{cwd}/..')
 import gzip,json
 import numpy as np
 import time
@@ -15,24 +16,19 @@ from vlnce_baselines.common.utils import extract_instruction_tokens
 from habitat_extensions.utils import generate_video, observations_to_image, text_to_append
 
 import matplotlib.pyplot as plt
-# from scripts.llama2_convert_high_level_instr import load_data, load_pose_trace, load_gt_data, get_llama2_model
 
-def load_data(data_type='train', role='guide'):
-    data_location = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}.json.gz'
-    data = {}
-    with gzip.open(data_location,"rt",) as f:
-        data.update(json.load(f))
-    return data
-
-def load_gt_data(data_type='train', role='guide'):
-    gt_data_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_gt.json.gz'
+def load_gt_data(data_type='train', role='guide', subtasks=False):
+    if subtasks:
+        gt_data_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_subtasks_rollouts_merged_gt.json.gz'
+    else:
+        gt_data_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_gt.json.gz'
     gt_data = {}
     with gzip.open(gt_data_file,"rt",) as f:
         gt_data.update(json.load(f))
     return gt_data
 
 def load_pose_trace(instruction_id, data_type='train', role='guide'):
-    pose_traces_path = f'/fs/scratch/rng_cr_aas3_gpu_user_c_lf/sp02_025_rrt/datasets/rxr-data/pose_traces/rxr_{data_type}/'
+    pose_traces_path = f'{cwd}/../data/datasets/RxR_VLNCE_v0/pose_traces/rxr_{data_type}/'
     pose_traces_file_name = '{id:06}_{role}_pose_trace.npz'
 
     pose_traces_file_name = pose_traces_file_name.replace('{role}', role)
@@ -101,50 +97,41 @@ if __name__== "__main__":
 
     if save_dataset:
         gt_data_new = {}
-    os.chdir('/home/sax1rng/Projects/VLN-CE-Plan') # Need to do this cos the config mergers use current working dir
+    os.chdir(f'{cwd}/..') # Need to do this cos the config mergers use current working dir
 
-    # data = load_data(data_type=data_type, role=role)
-    # gt_data = load_gt_data(data_type=data_type, role=role)
-
-    # gt_data_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_subtasks_rollouts_small_gt.json.gz'
-    # gt_data_rollouts = {}
-    # with gzip.open(gt_data_file,"rt",) as f:
-    #     gt_data_rollouts.update(json.load(f))
+    gt_data = load_gt_data(data_type=data_type, role=role, subtasks=subtasks)
 
     # Load config
     config_path = 'vlnce_baselines/config/rxr_baselines/rxr_cma_en_subtasks.yaml'if subtasks else 'vlnce_baselines/config/rxr_baselines/rxr_cma_en.yaml'
     config = get_config(config_path, [])
 
-    # From training script
-    split = config.TASK_CONFIG.DATASET.SPLIT
+    split = data_type
     config.defrost()
+    config.TASK_CONFIG.DATASET.SPLIT = split
+    config.TASK_CONFIG.DATASET.ROLES = ["guide"]
     config.TASK_CONFIG.TASK.NDTW.SPLIT = split
     config.TASK_CONFIG.TASK.SDTW.SPLIT = split
     config.IL.RECOLLECT_TRAINER.gt_path = (config.TASK_CONFIG.TASK.NDTW.GT_PATH)
+    config.IL.RECOLLECT_TRAINER.gt_file = (config.TASK_CONFIG.TASK.NDTW.GT_PATH)
+    config.TASK_CONFIG.DATASET.LANGUAGES = config.EVAL.LANGUAGES
     config.use_pbar = not is_slurm_batch_job()
+    config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.SHUFFLE = False
     config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.MAX_SCENE_REPEAT_STEPS = (-1)
     config.TASK_CONFIG.MEASUREMENTS = []
+    
+    # config.SIMULATOR_GPU_IDS: [0] # Evals run on these GPUs
+    # config.NUM_ENVIRONMENTS: 50 # Number of envs per GPU
+
     if save_video:
         config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
-        video_dir = '/home/sax1rng/Projects/VLN-CE-Plan/tests/media/subtasks_rollout' if subtasks else '/home/sax1rng/Projects/VLN-CE-Plan/tests/media'
+        video_dir = f'{cwd}/media/subtasks_rollout_merged' if subtasks else f'{cwd}/media'
     config.freeze()
-
-    with gzip.open(config.IL.RECOLLECT_TRAINER.trajectories_file, "rt") as f:
-        trajectories = json.load(f)
-    
-    episodes_allowed = list(trajectories.keys())
-    # import ipdb; ipdb.set_trace()
+ 
     envs = construct_envs(
         config,
         get_env_class(config.ENV_NAME),
-        episodes_allowed=episodes_allowed,
         auto_reset_done=False,
     )
-    # import ipdb; ipdb.set_trace()
-    print(f'Number of episodes allowed: {len(episodes_allowed)}/{len(list(trajectories.keys()))}' )
-    # envs = construct_envs_auto_reset_false(
-    #     config, get_env_class(config.ENV_NAME)
-    # ) # requires manually resetting the env using reset_at(i) method
 
     # Initialize envs
     env_step = [0 for _ in range(envs.num_envs)]
@@ -163,13 +150,11 @@ if __name__== "__main__":
         config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
     )
     current_episodes = envs.current_episodes()
+    stats_episodes = {}
+    total_num_episodes = sum(envs.number_of_episodes)
+    # pbar = tqdm(desc='episodes', total=total_num_episodes)
     
-    # Rollout
-    # start = time.time()
-    num_episodes_done = 0
-    done_all_episodes = False
-    # pbar = tqdm(desc='episodes', total=len(episodes_allowed))
-    while not done_all_episodes:
+    while len(stats_episodes) < total_num_episodes:
         current_episodes = envs.current_episodes()
         for i in range(envs.num_envs):
 
@@ -184,8 +169,6 @@ if __name__== "__main__":
             world_time[i].append(infos[i]['world_time'])
             
             if dones[i]:
-            # if dones[i] or (env_step[i] > len(trajectories[current_episodes[i].episode_id])-1):
-                # print('DONE: ', current_episodes[i].episode_id)
 
                 # plot_env_obs(
                 #     position[i], 
@@ -199,6 +182,7 @@ if __name__== "__main__":
                 #     )
 
                 if save_video:
+                    print("Saving episode id", current_episodes[i].episode_id)
                     generate_video(
                         video_option=['disk'],
                         video_dir=video_dir,
@@ -215,31 +199,24 @@ if __name__== "__main__":
                     gt_data_new[current_episodes[i].episode_id]['locations'] = position[i]
                     gt_data_new[current_episodes[i].episode_id]['rotations'] = rotation[i]
                     gt_data_new[current_episodes[i].episode_id]['forward_steps'] = int(np.sum(np.array(actions[i])==1))
-
+                
+                stats_episodes[current_episodes[i].episode_id] = infos[i]
+                if len(stats_episodes) %10 == 0:
+                    print(f'Done:{len(stats_episodes)}/{total_num_episodes}')
+                # pbar.update(len(stats_episodes))
                 env_step[i] = 0
                 position[i], rotation[i], world_time[i], rgb_frames[i], actions[i] = [], [], [], [], []
 
-                # end = time.time()
-                # # print(f"time_elapsed for episode id {current_episodes[i].episode_id} is {end - start}")
-                # print(f"Total time is {(end - start)*len(list(trajectories.keys()))/60/60}")
-                # start = time.time()
-                # import ipdb; ipdb.set_trace()
                 observations[i] = envs.reset_at(i)[0]
-                
-                num_episodes_done += 1
-                # pbar.update(num_episodes_done)
-                if num_episodes_done % 10 == 0:
-                    print('num_episodes_done:', num_episodes_done)
-                if num_episodes_done > (len(episodes_allowed)-1):
-                    print('KILLL MEEEE:', num_episodes_done)
-                    done_all_episodes = True
+
                 current_episodes = envs.current_episodes()
-                # print('after reset: ', current_episodes[i].episode_id)
+
                 infos[i] = envs.call_at(i, "get_info", {"observations": {}})
                 position[i].append(infos[i]['agent_position'])
                 rotation[i].append([infos[i]['agent_rotation'].x, infos[i]['agent_rotation'].y, infos[i]['agent_rotation'].z, infos[i]['agent_rotation'].w])
                 world_time[i].append(infos[i]['world_time'])
-                at[i] = trajectories[current_episodes[i].episode_id][env_step[i]][1]
+                # at[i] = trajectories[current_episodes[i].episode_id][env_step[i]][1]
+                at[i] = gt_data[current_episodes[i].episode_id]['actions'][env_step[i]]
                 actions[i].append(at[i])
                 if save_video:
                     frame = observations_to_image(observations[i], infos[i])
@@ -247,7 +224,8 @@ if __name__== "__main__":
                     frame = append_text_to_image(frame, _text)
                     rgb_frames[i].append(frame)
             else:
-                at[i] = trajectories[current_episodes[i].episode_id][env_step[i]][1]
+                # at[i] = trajectories[current_episodes[i].episode_id][env_step[i]][1]
+                at[i] = gt_data[current_episodes[i].episode_id]['actions'][env_step[i]]
                 actions[i].append(at[i])
             
             env_step[i] += 1
@@ -259,12 +237,10 @@ if __name__== "__main__":
             observations,
             config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
         )
-        if done_all_episodes:
-            break
     
-    print(f'Saving new GT {data_type} file')
     if save_dataset:
-        output_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_rollout_gt_small.json.gz'
+        print(f'Saving new GT {data_type} file')
+        output_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_rollout_gt3.json.gz'
         with gzip.open(output_file, "wt") as f:
             f.write(json.dumps(gt_data_new))
             print("Output file saved at ", output_file)

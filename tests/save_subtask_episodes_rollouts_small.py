@@ -1,4 +1,5 @@
 import sys, os
+cwd = os.getcwd()
 sys.path.append('/home/sax1rng/Projects/VLN-CE-Plan')
 import gzip, json
 import numpy as np
@@ -10,7 +11,7 @@ from habitat.utils.geometry_utils import angle_between_quaternions
 
 def load_data(data_type='train', role='guide', subtasks=False):
     postfix_subtask = '_subtasks' if subtasks else ''
-    data_location = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}{postfix_subtask}.json.gz'
+    data_location = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}{postfix_subtask}.json.gz'
     data = {}
     with gzip.open(data_location,"rt",) as f:
         data.update(json.load(f))
@@ -18,14 +19,14 @@ def load_data(data_type='train', role='guide', subtasks=False):
 
 def load_gt_data(data_type='train', role='guide', subtasks=False):
     postfix_subtask = '_subtasks' if subtasks else ''
-    gt_data_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}{postfix_subtask}_gt.json.gz'
+    gt_data_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}{postfix_subtask}_gt.json.gz'
     gt_data = {}
     with gzip.open(gt_data_file,"rt",) as f:
         gt_data.update(json.load(f))
     return gt_data
 
 def load_pose_trace(instruction_id, data_type='train', role='guide'):
-    pose_traces_path = f'/fs/scratch/rng_cr_aas3_gpu_user_c_lf/sp02_025_rrt/datasets/rxr-data/pose_traces/rxr_{data_type}/'
+    pose_traces_path = f'{cwd}/../data/datasets/RxR_VLNCE_v0/pose_traces/rxr_{data_type}/'
     pose_traces_file_name = '{id:06}_{role}_pose_trace.npz'
 
     pose_traces_file_name = pose_traces_file_name.replace('{role}', role)
@@ -116,7 +117,7 @@ def get_end_time_stamps_for_stepwise_instructions(stepwise_instruction, timed_in
     return tstamp_posetrace_idx, stepwise_instruction_steps, stepwise_timed_instruction
 
 
-def get_gt_end_steps_for_stepwise_instructions(tstamp_posetrace_idx, pose_trace, gt_data, gt_data_rollouts, episode_id):
+def get_gt_end_steps_for_stepwise_instructions(tstamp_posetrace_idx, pose_trace, gt_data_rollouts, episode_id):
     gt_locations = np.array(gt_data_rollouts[episode_id]['locations'])
     gt_orients = np.array(gt_data_rollouts[episode_id]['rotations'])
     gt_actions = np.array(gt_data_rollouts[episode_id]['actions'])
@@ -153,12 +154,9 @@ if __name__== "__main__":
     role = 'guide'
 
     data = load_data(data_type=data_type, role=role)
-    gt_data = load_gt_data(data_type=data_type, role=role)
+    # gt_data = load_gt_data(data_type=data_type, role=role)
 
-    data_subtasks = load_data(data_type=data_type, role=role, subtasks=True)
-    gt_data_subtasks = load_gt_data(data_type=data_type, role=role, subtasks=True)
-
-    gt_data_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_rollout_gt_small.json.gz'
+    gt_data_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_rollout_gt2.json.gz'
     gt_data_rollouts = {}
     with gzip.open(gt_data_file,"rt",) as f:
         gt_data_rollouts.update(json.load(f))
@@ -170,9 +168,9 @@ if __name__== "__main__":
     dataset_size = len(data['episodes'])
     en_idx = [i for i in range(dataset_size) if ('en' in data['episodes'][i]['instruction']['language'])]
 
-    subtask_dataset_size = len(data_subtasks['episodes'])
+    # subtask_dataset_size = len(data_subtasks['episodes'])
 
-    subtask_dir = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/subtask_instructions/'
+    subtask_dir = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/subtask_instructions/'
     subtask_files = os.listdir(subtask_dir)
 
     episode_idx_new = 0
@@ -186,8 +184,7 @@ if __name__== "__main__":
         for ep_idx in ep_idx_sub:
             instruction_id = data['episodes'][int(ep_idx)]['instruction']['instruction_id']
             pose_trace = load_pose_trace(instruction_id, data_type=data_type, role=role)
-            end_idx = min(episode_idx_new+20,subtask_dataset_size)
-            few_future_isntructions = [data_subtasks['episodes'][d]['instruction']['instruction_text'] for d in range(episode_idx_new,end_idx)]
+            few_future_isntructions = []
             ep_id = data['episodes'][int(ep_idx)]['episode_id']
             
             tstamp_posetrace_idx, stepwise_instruction_steps, stepwise_timed_instruction = get_end_time_stamps_for_stepwise_instructions(
@@ -196,71 +193,62 @@ if __name__== "__main__":
                 pose_trace,
                 few_future_isntructions)
             
-            if ep_id in gt_data_rollouts_ep_ids:
-                tstamp_gt_actions_idxs, tstamp_gt_locations_idxs = get_gt_end_steps_for_stepwise_instructions(
-                    tstamp_posetrace_idx, 
-                    pose_trace, 
-                    gt_data,
-                    gt_data_rollouts,
-                    ep_id)
+            tstamp_gt_actions_idxs, tstamp_gt_locations_idxs = get_gt_end_steps_for_stepwise_instructions(
+                tstamp_posetrace_idx, 
+                pose_trace, 
+                gt_data_rollouts,
+                ep_id)
             
             for step_idx, sub_instr in enumerate(stepwise_instruction_steps):
-                sub_instr_saved = data_subtasks['episodes'][episode_idx_new]['instruction']['instruction_text']
-                # print("Saved sub instruction: \n", data_subtasks['episodes'][int(episode_idx_new)]['instruction']['instruction_text'])
-                # print("New sub instruction: \n", sub_instr)
 
-                if sub_instr_saved == sub_instr and (ep_id in gt_data_rollouts_ep_ids):
-                    episode_new = {}
-                    episode_new['episode_id'] = str(episode_idx_new)
-                    episode_new['trajectory_id'] = str(episode_idx_new)
-                    episode_new['scene_id'] = data['episodes'][int(ep_idx)]['scene_id']
-                    episode_new['info'] = data['episodes'][int(ep_idx)]['info']
-                    episode_new['reference_path'] = data['episodes'][int(ep_idx)]['reference_path']
-                    episode_new['start_position'] = gt_data_rollouts[ep_id]['locations'][tstamp_gt_locations_idxs[step_idx]]
-                    episode_new['start_rotation'] = gt_data_rollouts[ep_id]['rotations'][tstamp_gt_locations_idxs[step_idx]]
-                    episode_new['goals'] = [
-                        {'position': gt_data_rollouts[ep_id]['locations'][tstamp_gt_locations_idxs[step_idx+1]],
-                        'radius': 3.0}]
+                episode_new = {}
+                episode_new['episode_id'] = str(episode_idx_new)
+                episode_new['trajectory_id'] = str(episode_idx_new)
+                episode_new['scene_id'] = data['episodes'][int(ep_idx)]['scene_id']
+                episode_new['info'] = data['episodes'][int(ep_idx)]['info']
+                episode_new['reference_path'] = data['episodes'][int(ep_idx)]['reference_path']
+                episode_new['start_position'] = gt_data_rollouts[ep_id]['locations'][tstamp_gt_locations_idxs[step_idx]]
+                episode_new['start_rotation'] = gt_data_rollouts[ep_id]['rotations'][tstamp_gt_locations_idxs[step_idx]]
+                episode_new['goals'] = [
+                    {'position': gt_data_rollouts[ep_id]['locations'][tstamp_gt_locations_idxs[step_idx+1]],
+                    'radius': 3.0}]
 
-                    instruction = {}
-                    instruction['instruction_id'] = str(episode_idx_new)
-                    instruction['language'] = data['episodes'][int(ep_idx)]['instruction']['language']
-                    instruction['annotator_id'] = data['episodes'][int(ep_idx)]['instruction']['annotator_id']
-                    instruction['edit_distance'] = data['episodes'][int(ep_idx)]['instruction']['edit_distance']
-                    instruction['instruction_text'] = sub_instr
-                    instruction['timed_instruction'] = stepwise_timed_instruction[step_idx]
-                    episode_new['instruction'] = instruction
+                instruction = {}
+                instruction['instruction_id'] = str(episode_idx_new)
+                instruction['language'] = data['episodes'][int(ep_idx)]['instruction']['language']
+                instruction['annotator_id'] = data['episodes'][int(ep_idx)]['instruction']['annotator_id']
+                instruction['edit_distance'] = data['episodes'][int(ep_idx)]['instruction']['edit_distance']
+                instruction['instruction_text'] = sub_instr
+                instruction['timed_instruction'] = stepwise_timed_instruction[step_idx]
+                episode_new['instruction'] = instruction
 
-                    data_new['episodes'].append(episode_new)
+                data_new['episodes'].append(episode_new)
 
-                    gt_data_new[str(episode_idx_new)] = {'actions': [], 'locations': [], 'forward_steps': 0}
-                    gt_data_new[str(episode_idx_new)]['actions'] = gt_data_rollouts[ep_id]['actions'][
-                        tstamp_gt_actions_idxs[step_idx]+1:tstamp_gt_actions_idxs[step_idx+1]+1]
-                    gt_data_new[str(episode_idx_new)]['actions'].append(0)
-                    
-                    gt_data_new[str(episode_idx_new)]['locations'] = gt_data_rollouts[ep_id]['locations'][
-                        tstamp_gt_locations_idxs[step_idx]:tstamp_gt_locations_idxs[step_idx+1]+1]
-                    gt_data_new[str(episode_idx_new)]['locations'].append(gt_data_rollouts[ep_id]['locations'][tstamp_gt_locations_idxs[step_idx+1]])
-                    
-                    gt_data_new[str(episode_idx_new)]['rotations'] = gt_data_rollouts[ep_id]['rotations'][
-                        tstamp_gt_locations_idxs[step_idx]:tstamp_gt_locations_idxs[step_idx+1]+1]
-                    gt_data_new[str(episode_idx_new)]['rotations'].append(gt_data_rollouts[ep_id]['rotations'][tstamp_gt_locations_idxs[step_idx+1]])    
-                    
-                    gt_data_new[str(episode_idx_new)]['forward_steps'] = int(np.sum(np.array(gt_data_new[str(episode_idx_new)]['actions'])==1))
-                    gt_data_new[str(episode_idx_new)]['original_episode_idx'] = int(ep_idx)
-                    episode_idx_new += 1
-                else:
-                    episode_idx_new += 1
+                gt_data_new[str(episode_idx_new)] = {'actions': [], 'locations': [], 'forward_steps': 0}
+                gt_data_new[str(episode_idx_new)]['actions'] = gt_data_rollouts[ep_id]['actions'][
+                    tstamp_gt_actions_idxs[step_idx]+1:tstamp_gt_actions_idxs[step_idx+1]+1]
+                gt_data_new[str(episode_idx_new)]['actions'].append(0)
                 
+                gt_data_new[str(episode_idx_new)]['locations'] = gt_data_rollouts[ep_id]['locations'][
+                    tstamp_gt_locations_idxs[step_idx]:tstamp_gt_locations_idxs[step_idx+1]+1]
+                gt_data_new[str(episode_idx_new)]['locations'].append(gt_data_rollouts[ep_id]['locations'][tstamp_gt_locations_idxs[step_idx+1]])
+                
+                gt_data_new[str(episode_idx_new)]['rotations'] = gt_data_rollouts[ep_id]['rotations'][
+                    tstamp_gt_locations_idxs[step_idx]:tstamp_gt_locations_idxs[step_idx+1]+1]
+                gt_data_new[str(episode_idx_new)]['rotations'].append(gt_data_rollouts[ep_id]['rotations'][tstamp_gt_locations_idxs[step_idx+1]])    
+                
+                gt_data_new[str(episode_idx_new)]['forward_steps'] = int(np.sum(np.array(gt_data_new[str(episode_idx_new)]['actions'])==1))
+                gt_data_new[str(episode_idx_new)]['original_episode_idx'] = int(ep_idx)
+                episode_idx_new += 1
 
     print(f'Saving new {data_type} file')
-    output_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_subtasks_rollouts_small.json.gz'
+    output_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_subtasks_rollouts2.json.gz'
     with gzip.open(output_file, "wt") as f:
         f.write(json.dumps(data_new))
         print("Output file saved at ", output_file)
 
     print(f'Saving new GT {data_type} file')
-    output_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_subtasks_rollouts_small_gt.json.gz'
+    output_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_subtasks_rollouts_gt2.json.gz'
     with gzip.open(output_file, "wt") as f:
         f.write(json.dumps(gt_data_new))
         print("Output file saved at ", output_file)
