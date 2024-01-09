@@ -88,11 +88,11 @@ def plot_env_obs(agent_state, world_time, actions, instruction_id, episode_id, g
     
 
 if __name__== "__main__":
-    save_video = True
-    subtasks = True
-    save_dataset = False
+    save_video = False
+    subtasks = False
+    save_dataset = True
 
-    data_type = 'train'
+    data_type = 'val_unseen'
     role = 'guide'
 
     if save_dataset:
@@ -126,7 +126,7 @@ if __name__== "__main__":
         config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
         video_dir = f'{cwd}/media/subtasks_rollout_merged' if subtasks else f'{cwd}/media'
     config.freeze()
- 
+
     envs = construct_envs(
         config,
         get_env_class(config.ENV_NAME),
@@ -240,7 +240,7 @@ if __name__== "__main__":
     
     if save_dataset:
         print(f'Saving new GT {data_type} file')
-        output_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_rollout_gt3.json.gz'
+        output_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_rollout_gt.json.gz'
         with gzip.open(output_file, "wt") as f:
             f.write(json.dumps(gt_data_new))
             print("Output file saved at ", output_file)

@@ -105,7 +105,7 @@ def merge_with_next(gt_data, data, episode_idx_old, episode_idx_new):
 
 if __name__== "__main__":
 
-    data_type = 'val_seen'
+    data_type = 'val_unseen'
     role = 'guide'
     subtasks = True
 

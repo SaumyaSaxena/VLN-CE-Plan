@@ -4,8 +4,8 @@ from tqdm import tqdm
 
 if __name__== "__main__":
     
-    data_type = 'val_unseen'
-    data_location = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_guide.json.gz'
+    data_type = 'train'
+    data_location = f'/home/saumyas/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_guide.json.gz'
     data = {}
     with gzip.open(data_location,"rt",) as f:
         data.update(json.load(f))
@@ -44,7 +44,7 @@ if __name__== "__main__":
             import ipdb; ipdb.set_trace()
     
     print(f'Saving new {data_type} file')
-    output_file = f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_guide_high_level_instr.json.gz'
+    output_file = f'/home/saumyas/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_guide_high_level_instr.json.gz'
     with gzip.open(output_file, "wt") as f:
         f.write(json.dumps(new_data))
         print("Output file saved at ", output_file)

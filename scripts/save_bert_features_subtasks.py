@@ -34,7 +34,7 @@ def load_model():
     return preprocess_model, encoder
 
 if __name__== "__main__":
-    data_type = 'val_unseen'
+    data_type = 'train'
     role = 'guide'
     data = load_data(data_type=data_type, role=role)
     n_episodes = len(data['episodes'])
