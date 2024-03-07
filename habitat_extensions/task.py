@@ -37,6 +37,7 @@ class ExtendedInstructionData:
 class VLNExtendedEpisode(VLNEpisode):
     goals: Optional[List[NavigationGoal]] = attr.ib(default=None)
     reference_path: Optional[List[List[float]]] = attr.ib(default=None)
+    original_episode_idx: Optional[Union[int, str]] = attr.ib(default=None)
     instruction: ExtendedInstructionData = attr.ib(
         default=None, validator=not_none_validator
     )

@@ -1,9 +1,9 @@
 import openai
-import json
+import json, os
 import tiktoken
 
 def response_gen(messages):
-    openai.api_key = "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"
+    openai.api_key = os.environ['OPENAI_API_KEY']
     response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages)
     print(response)
 

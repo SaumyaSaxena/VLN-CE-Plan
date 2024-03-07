@@ -7,7 +7,7 @@ import transformers
 import imageio
 import time
 
-openai.api_key = "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"
+openai.api_key = os.environ['OPENAI_API_KEY']
 
 def gpt_response(messages):
     done = False

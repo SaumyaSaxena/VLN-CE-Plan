@@ -31,7 +31,7 @@ def text_to_append(instruction):
         return text
 
 def observations_to_image(
-    observation: Dict[str, Any], info: Dict[str, Any]
+    observation: Dict[str, Any], info: Dict[str, Any], append_depth: bool = True, append_map: bool = True
 ) -> ndarray:
     """Generate image of single frame from observation and info
     returned from a single environment step().
@@ -56,7 +56,7 @@ def observations_to_image(
         egocentric_view.append(rgb)
 
     # draw depth map if observation has depth info. resize to rgb size.
-    if "depth" in observation:
+    if "depth" in observation and append_depth:
         if observation_size == -1:
             observation_size = observation["depth"].shape[0]
         depth_map = (observation["depth"].squeeze() * 255).astype(np.uint8)
@@ -76,9 +76,9 @@ def observations_to_image(
     frame = egocentric_view
 
     map_k = None
-    if "top_down_map_vlnce" in info:
+    if "top_down_map_vlnce" in info and append_map:
         map_k = "top_down_map_vlnce"
-    elif "top_down_map" in info:
+    elif "top_down_map" in info and append_map:
         map_k = "top_down_map"
 
     if map_k is not None:

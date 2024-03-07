@@ -4,7 +4,7 @@ from tqdm import tqdm
 # from multiprocessing import Process
 # import multiprocessing
 
-openai.api_key = "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"
+openai.api_key = os.environ['OPENAI_API_KEY']
 
 def gpt_response(messages):
     done = False

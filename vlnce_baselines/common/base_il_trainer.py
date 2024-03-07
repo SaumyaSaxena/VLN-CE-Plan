@@ -258,7 +258,7 @@ class BaseVLNCETrainer(BaseILTrainer):
 
         return config
         
-    def eval(self) -> None:
+    def eval(self, context=False) -> None:
         r"""Main method of trainer evaluation. Calls _eval_checkpoint() that
         is specified in Trainer class that inherits from BaseRLTrainer
         or BaseILTrainer
@@ -293,11 +293,18 @@ class BaseVLNCETrainer(BaseILTrainer):
                     ckpt_idx = proposed_index
                 else:
                     ckpt_idx = 0
-                self._eval_checkpoint(
-                    self.config.EVAL.EVAL_CKPT_PATH_DIR,
-                    writer,
-                    checkpoint_index=ckpt_idx,
-                )
+                if context:
+                    self._eval_checkpoint_context(
+                        self.config.EVAL.EVAL_CKPT_PATH_DIR,
+                        writer,
+                        checkpoint_index=ckpt_idx,
+                    )
+                else:
+                    self._eval_checkpoint(
+                        self.config.EVAL.EVAL_CKPT_PATH_DIR,
+                        writer,
+                        checkpoint_index=ckpt_idx,
+                    )
             else:
                 # evaluate multiple checkpoints in order
                 prev_ckpt_ind = -1

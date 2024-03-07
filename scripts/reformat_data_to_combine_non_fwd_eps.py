@@ -26,6 +26,7 @@ def load_gt_data(data_type='train', role='guide', subtasks=False):
 def merge_episodes(gt_data, data, start_i, end_i, episode_idx_new):
     episode_new = {}
     episode_new['episode_id'] = str(episode_idx_new)
+    episode_new['original_episode_idx'] = str(gt_data[str(start_i)]['original_episode_idx'])
     episode_new['trajectory_id'] = str(episode_idx_new)
     episode_new['scene_id'] = data['episodes'][start_i]['scene_id']
     episode_new['info'] = data['episodes'][start_i]['info']
@@ -41,6 +42,8 @@ def merge_episodes(gt_data, data, start_i, end_i, episode_idx_new):
     instruction['language'] = data['episodes'][start_i]['instruction']['language']
     instruction['annotator_id'] = data['episodes'][start_i]['instruction']['annotator_id']
     instruction['edit_distance'] = data['episodes'][start_i]['instruction']['edit_distance']
+    if 'high_level_instruction' in data['episodes'][start_i]['instruction'].keys():
+        instruction['high_level_instruction'] = data['episodes'][start_i]['instruction']['high_level_instruction']
     instruction['instruction_text'] = ' '.join(
             [data['episodes'][i]['instruction']['instruction_text'] 
             for i in range(start_i, end_i+1)]

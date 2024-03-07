@@ -9,9 +9,9 @@ from tqdm import tqdm
 import quaternion
 from habitat.utils.geometry_utils import angle_between_quaternions
 
-def load_data(data_type='train', role='guide', subtasks=False):
-    postfix_subtask = '_subtasks' if subtasks else ''
-    data_location = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}{postfix_subtask}.json.gz'
+def load_data(data_type='train', role='guide', high_level_instr=False):
+    postfix_hli = '_high_level_instr' if high_level_instr else ''
+    data_location = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}{postfix_hli}.json.gz'
     data = {}
     with gzip.open(data_location,"rt",) as f:
         data.update(json.load(f))
@@ -150,8 +150,9 @@ if __name__== "__main__":
 
     data_type = 'val_unseen'
     role = 'guide'
+    high_level_instr = False
 
-    data = load_data(data_type=data_type, role=role)
+    data = load_data(data_type=data_type, role=role, high_level_instr=high_level_instr)
     # gt_data = load_gt_data(data_type=data_type, role=role)
 
     gt_data_file = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_rollout_gt.json.gz'
@@ -199,6 +200,7 @@ if __name__== "__main__":
 
                 episode_new = {}
                 episode_new['episode_id'] = str(episode_idx_new)
+                episode_new['original_episode_idx'] = str(ep_idx)
                 episode_new['trajectory_id'] = str(episode_idx_new)
                 episode_new['scene_id'] = data['episodes'][int(ep_idx)]['scene_id']
                 episode_new['info'] = data['episodes'][int(ep_idx)]['info']
@@ -215,6 +217,8 @@ if __name__== "__main__":
                 instruction['annotator_id'] = data['episodes'][int(ep_idx)]['instruction']['annotator_id']
                 instruction['edit_distance'] = data['episodes'][int(ep_idx)]['instruction']['edit_distance']
                 instruction['instruction_text'] = sub_instr
+                if high_level_instr:
+                    instruction['high_level_instruction'] = data['episodes'][int(ep_idx)]['instruction']['high_level_instruction']
                 instruction['timed_instruction'] = stepwise_timed_instruction[step_idx]
                 episode_new['instruction'] = instruction
 

@@ -1,7 +1,7 @@
 BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_subtasks.yaml
 TRAINER_NAME: recollect_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
-TORCH_GPU_ID: 2
+TORCH_GPU_ID: 1
 NUM_ENVIRONMENTS: 1 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_cma_en_subtasks
 CHECKPOINT_FOLDER: outputs/rxr_cma_en_subtasks
@@ -27,6 +27,11 @@ EVAL:
   VIDEO_SAVE_FREQ: 500
   VIDEO_SAVE_LOC: ['disk'] # options: "disk", "tensorboard"
   SAVE_RESULTS: True
+  VL_MODEL: 'blip2' # 'blip2', 'gemini-pro-vision'
+  LL_MODEL: 'gpt-3.5-turbo' # 'gemini-pro'
+  MAX_NUM_SUBTASKS: 6
+  MAX_STEPS_PER_SUBTASK: 50
+  VIDEO_SUBSAMPLE: 3
 
   EVAL_TASK:
     SUCCESS_DISTANCE: 1.0

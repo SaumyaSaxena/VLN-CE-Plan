@@ -87,7 +87,6 @@ def construct_envs(
 
             proc_config.freeze()
             configs.append(proc_config)
-
     envs = habitat.VectorEnv(
         make_env_fn=make_env_fn,
         env_fn_args=tuple(zip(configs, env_classes)),

@@ -88,9 +88,9 @@ def plot_env_obs(agent_state, world_time, actions, instruction_id, episode_id, g
     
 
 if __name__== "__main__":
-    save_video = False
+    save_video = True
     subtasks = False
-    save_dataset = True
+    save_dataset = False
 
     data_type = 'val_unseen'
     role = 'guide'

@@ -164,7 +164,10 @@ class RxRInstructionSensor(Sensor):
 
     def __init__(self, *args: Any, config: Config, **kwargs: Any):
         self.features_path = config.features_path
+        # self.use_bert_features = config.get('use_bert_features', False)
         super().__init__(config=config)
+        # if self.use_bert_features:
+        self.load_bert_model()
 
     def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
         return self.cls_uuid
@@ -179,10 +182,32 @@ class RxRInstructionSensor(Sensor):
             shape=(512, 768),
             dtype=float,
         )
+    
+    def load_bert_model(self, seq_length=128):
+        import tensorflow as tf
+        import tensorflow_hub as hub
+        import tensorflow_text
+
+        input_segments = tf.keras.layers.Input(shape=(), dtype=tf.string)
+        preprocessor = hub.load(f'/home/saumyas/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_preprocess_3/')
+
+        tokenizer = hub.KerasLayer(preprocessor.tokenize, name='tokenizer')
+        tokenized_input = [tokenizer(input_segments)]
+
+        packer = hub.KerasLayer(preprocessor.bert_pack_inputs,
+                            arguments=dict(seq_length=seq_length),
+                            name='packer')
+        model_inputs = packer(tokenized_input)
+
+        self.preprocess_model = tf.keras.Model(input_segments, model_inputs)
+        self.encoder = hub.KerasLayer(f'/home/saumyas/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_L-12_H-768_A-12_4/',trainable=True)
 
     def get_observation(
         self, *args: Any, episode: VLNExtendedEpisode, **kwargs
-    ):
+    ):  
+        # if self.use_bert_features:
+        feats1 = self.get_bert_features(episode.instruction.instruction_text)
+        # else:
         features = np.load(
             self.features_path.format(
                 split=episode.instruction.split,
@@ -193,4 +218,10 @@ class RxRInstructionSensor(Sensor):
         feats = np.zeros((512, 768), dtype=np.float32)
         s = features["features"].shape
         feats[: s[0], : s[1]] = features["features"]
+        import ipdb; ipdb.set_trace()
         return feats
+    
+    def get_bert_features(self, instruction_text):
+        preprocessed_input = self.preprocess_model(instruction_text)
+        output = self.encoder(preprocessed_input)
+        return output['sequence_output']

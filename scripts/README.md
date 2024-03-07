@@ -45,3 +45,14 @@ Finally, generate BERT for the sub-instructions:
 ```
 python scripts/save_bert_features_subtasks.py
 ```
+
+# Training and evaluation
+
+## Training for subtask policies
+```
+python run.py --exp-config vlnce_baselines/config/rxr_baselines/rxr_cma_en_subtasks.yaml --run-type train/eval
+```
+
+# Context learning
+
+## Testing on ground truth trajectories/videos
