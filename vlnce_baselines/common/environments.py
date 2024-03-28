@@ -25,8 +25,23 @@ class VLNCEDaggerEnv(habitat.RLEnv):
     def get_reward(self, observations: Observations) -> float:
         return 0.0
 
+    def _episode_success(self) -> bool:
+        return self.habitat_env.get_metrics()["success"]
+
     def get_done(self, observations: Observations) -> bool:
-        return self._env.episode_over
+        return self._episode_success()
+
+    def get_is_stop_called(self) -> int:
+        return self._env.task.is_stop_called
+
+    def set_is_stop_called(self, is_stop_called):
+        self._env.task.is_stop_called = is_stop_called
+    
+    def get_elapsed_steps(self) -> int:
+        return self._env._elapsed_steps
+    
+    def update_instruction(self, instruction):
+        self._env.current_episode.instruction.instruction_text = instruction
 
     def get_info(self, observations: Observations) -> Dict[Any, Any]:
         metrics = self.habitat_env.get_metrics()

@@ -10,6 +10,10 @@ from habitat.sims.habitat_simulator.actions import HabitatSimActions
 from habitat.tasks.nav.shortest_path_follower import ShortestPathFollower
 from numpy import ndarray
 
+import tensorflow as tf
+import tensorflow_hub as hub
+import tensorflow_text
+
 from habitat_extensions.shortest_path_follower import (
     ShortestPathFollowerCompat,
 )
@@ -164,10 +168,10 @@ class RxRInstructionSensor(Sensor):
 
     def __init__(self, *args: Any, config: Config, **kwargs: Any):
         self.features_path = config.features_path
-        # self.use_bert_features = config.get('use_bert_features', False)
+        self.use_bert_features = config.get('use_bert_features', False)
         super().__init__(config=config)
-        # if self.use_bert_features:
-        self.load_bert_model()
+        if self.use_bert_features:
+            self.load_bert_model()
 
     def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
         return self.cls_uuid
@@ -184,10 +188,6 @@ class RxRInstructionSensor(Sensor):
         )
     
     def load_bert_model(self, seq_length=128):
-        import tensorflow as tf
-        import tensorflow_hub as hub
-        import tensorflow_text
-
         input_segments = tf.keras.layers.Input(shape=(), dtype=tf.string)
         preprocessor = hub.load(f'/home/saumyas/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_preprocess_3/')
 
@@ -205,23 +205,27 @@ class RxRInstructionSensor(Sensor):
     def get_observation(
         self, *args: Any, episode: VLNExtendedEpisode, **kwargs
     ):  
-        # if self.use_bert_features:
-        feats1 = self.get_bert_features(episode.instruction.instruction_text)
-        # else:
-        features = np.load(
-            self.features_path.format(
-                split=episode.instruction.split,
-                id=int(episode.instruction.instruction_id),
-                lang=episode.instruction.language.split("-")[0],
+        if self.use_bert_features:
+            bert_feats = self.get_bert_features(episode.instruction.instruction_text)
+            feats = np.zeros((512, 768), dtype=np.float32)
+            s = bert_feats.shape
+            feats[: s[0], : s[1]] = bert_feats
+        else:
+            features = np.load(
+                self.features_path.format(
+                    split=episode.instruction.split,
+                    id=int(episode.instruction.instruction_id),
+                    lang=episode.instruction.language.split("-")[0],
+                )
             )
-        )
-        feats = np.zeros((512, 768), dtype=np.float32)
-        s = features["features"].shape
-        feats[: s[0], : s[1]] = features["features"]
-        import ipdb; ipdb.set_trace()
+            feats = np.zeros((512, 768), dtype=np.float32)
+            s = features["features"].shape
+            feats[: s[0], : s[1]] = features["features"]
+
         return feats
     
     def get_bert_features(self, instruction_text):
-        preprocessed_input = self.preprocess_model(instruction_text)
+        sentences = tf.constant([instruction_text])
+        preprocessed_input = self.preprocess_model(sentences)
         output = self.encoder(preprocessed_input)
-        return output['sequence_output']
+        return output['sequence_output'][0]

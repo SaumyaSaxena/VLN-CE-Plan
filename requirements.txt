@@ -16,4 +16,8 @@ tqdm>=4.0.0
 # tb-nightly
 yacs>=0.1.5
 Opencv-python>=3.3.0
-Pillow==6.2.1
+# Pillow==6.2.1
+tensorflow==2.13.1
+tensorflow_hub==0.15.0
+tensorflow_text==2.13.0
+openai==0.28

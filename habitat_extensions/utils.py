@@ -23,12 +23,51 @@ from habitat_extensions import maps
 
 cv2 = try_cv2_import()
 
-def text_to_append(instruction):
+def text_to_append(instruction, extra_text = ''):
     if instruction.high_level_instruction is None:
-        return instruction.instruction_text
+        output = instruction.instruction_text
     else:
-        text = instruction.instruction_text + f'High level Instruction: {instruction.high_level_instruction}'
-        return text
+        output = instruction.instruction_text + f' High level Instruction: {instruction.high_level_instruction}'
+    output = output + '\n' + extra_text
+    return output
+
+def append_text_to_image_fixed_height(image: np.ndarray, text: str):
+    r"""Appends text underneath an image of size (height, width, channels).
+    The returned image has white text on a black background. Uses textwrap to
+    split long text into multiple lines.
+    Args:
+        image: the image to put text underneath
+        text: a string to display
+    Returns:
+        A new image with text inserted underneath the input image
+    """
+    h, w, c = image.shape
+    font_size = 0.5
+    font_thickness = 1
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    blank_image = np.zeros(image.shape, dtype=np.uint8)
+
+    char_size = cv2.getTextSize(" ", font, font_size, font_thickness)[0]
+    wrapped_text = textwrap.wrap(text, width=int(w / char_size[0]))
+
+    y = 0
+    for line in wrapped_text:
+        textsize = cv2.getTextSize(line, font, font_size, font_thickness)[0]
+        y += textsize[1] + 10
+        x = 10
+        cv2.putText(
+            blank_image,
+            line,
+            (x, y),
+            font,
+            font_size,
+            (255, 255, 255),
+            font_thickness,
+            lineType=cv2.LINE_AA,
+        )
+    text_image = blank_image[0 : 100, 0:w]
+    final = np.concatenate((image, text_image), axis=0)
+    return final
 
 def observations_to_image(
     observation: Dict[str, Any], info: Dict[str, Any], append_depth: bool = True, append_map: bool = True

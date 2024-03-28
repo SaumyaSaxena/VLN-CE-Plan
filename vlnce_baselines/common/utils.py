@@ -50,12 +50,36 @@ def get_gemini_vision_model():
     GOOGLE_API_KEY=os.environ['GOOGLE_API_KEY']
     genai.configure(api_key=GOOGLE_API_KEY)
 
-    gemini_model = genai.GenerativeModel('gemini-pro-vision')
+    safety_settings = [
+        {
+            "category": "HARM_CATEGORY_DANGEROUS",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        },
+    ]
+
+    gemini_model = genai.GenerativeModel('gemini-pro-vision', safety_settings=safety_settings)
     ## For some reason throws error without doing below
-    url = 'https://storage.googleapis.com/sfr-vision-language-research/LAVIS/assets/merlion.png' 
-    img = Image.open(requests.get(url, stream=True).raw).convert('RGB')   
-    response = gemini_model.generate_content(["Write a short, engaging blog post based on this picture.", img], stream=True)
-    response.resolve()
+    
+    # url = 'https://storage.googleapis.com/sfr-vision-language-research/LAVIS/assets/merlion.png' 
+    # img = Image.open(requests.get(url, stream=True).raw).convert('RGB')   
+    # response = gemini_model.generate_content(["Write a short, engaging blog post based on this picture.", img], stream=True)
+    # response.resolve()
 
     return gemini_model
 
@@ -68,13 +92,13 @@ def get_gemini_text_model():
 
     return genai.GenerativeModel('gemini-pro')
 
-def get_blip2_model():
+def get_blip2_model(device):
     from transformers import AutoProcessor, Blip2ForConditionalGeneration
     import torch
     processor = AutoProcessor.from_pretrained("Salesforce/blip2-opt-2.7b")
     # by default `from_pretrained` loads the weights in float32
     # we load in float16 instead to save memory
-    model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-opt-2.7b", torch_dtype=torch.float16)
+    model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-opt-2.7b", torch_dtype=torch.float16).to(device)
     return processor, model
 
 def make_bert_preprocess_model(seq_length=128):

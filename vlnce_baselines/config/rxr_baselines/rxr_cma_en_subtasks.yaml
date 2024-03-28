@@ -28,17 +28,19 @@ EVAL:
   VIDEO_SAVE_LOC: ['disk'] # options: "disk", "tensorboard"
   SAVE_RESULTS: True
 
-  EVAL_TASK:
-    SUCCESS_DISTANCE: 1.0
-    SUCCESS:
+  EVAL_TASK_CONFIG:
+    TASK:
       SUCCESS_DISTANCE: 1.0
-    ORACLE_SUCCESS:
-      SUCCESS_DISTANCE: 1.0
-    NDTW:
-      SUCCESS_DISTANCE: 1.0
+      SUCCESS:
+        SUCCESS_DISTANCE: 1.0
+      ORACLE_SUCCESS:
+        SUCCESS_DISTANCE: 1.0
+      NDTW:
+        SUCCESS_DISTANCE: 1.0
+
   COMMON:
-    SIMULATOR_GPU_IDS: [2] # Evals run on these GPUs
-    NUM_ENVIRONMENTS: 10 # Number of envs per GPU
+    SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
+    NUM_ENVIRONMENTS: 1 # Number of envs per GPU
 
 RL:
   POLICY:

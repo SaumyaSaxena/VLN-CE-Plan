@@ -4,6 +4,7 @@ import warnings
 from typing import List
 import datetime
 from PIL import Image
+import numpy as np
 
 import torch
 import tqdm
@@ -12,6 +13,7 @@ from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_batch,
 )
+from habitat_baselines.utils.common import batch_obs
 from habitat_baselines.common.environments import get_env_class
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.rl.ddppo.algo.ddp_utils import is_slurm_batch_job
@@ -24,12 +26,14 @@ from vlnce_baselines.common.recollection_dataset import (
 )
 from vlnce_baselines.common.env_utils import construct_envs_auto_reset_false
 from vlnce_baselines.dagger_trainer import collate_fn
-from habitat_extensions.utils import generate_video, observations_to_image, text_to_append
+from vlnce_baselines.common.utils import extract_instruction_tokens
+from habitat_extensions.utils import generate_video, observations_to_image, text_to_append, append_text_to_image_fixed_height
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     # import tensorflow as tf  # noqa: F401
 
+import openai
 
 @baseline_registry.register_trainer(name="recollect_trainer")
 class RecollectTrainer(BaseVLNCETrainer):
@@ -278,7 +282,7 @@ class RecollectTrainer(BaseVLNCETrainer):
             assert (
                 len(config.EVAL.VIDEO_SAVE_LOC) > 0
             ), "Must specify a video save location "
-            video_dir = f'{eval_dir}/videos_ckpt{checkpoint_index}/{split}_{config.TASK_CONFIG.TASK.SUCCESS_DISTANCE}'
+            video_dir = f'{eval_dir}/videos_ckpt{checkpoint_index}/{split}_{config.TASK_CONFIG.TASK.SUCCESS_DISTANCE}_success_detection_stop'
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
 
         config.freeze()
@@ -333,6 +337,8 @@ class RecollectTrainer(BaseVLNCETrainer):
         rgb_frames_to_save = [[] for _ in range(envs.num_envs)]
         summary = [' ' for _ in range(envs.num_envs)]
         high_level_instruction = [' ' for _ in range(envs.num_envs)]
+        current_instruction = [' ' for _ in range(envs.num_envs)]
+        success_detected = [False for _ in range(envs.num_envs)]
 
         num_eps = sum(envs.number_of_episodes)
         if config.EVAL.EPISODE_COUNT > -1:
@@ -345,6 +351,10 @@ class RecollectTrainer(BaseVLNCETrainer):
             " [Time elapsed (s): {time}]"
         )
         start_time = time.time()
+        
+        if config.EVAL.SAVE_RESULTS:
+            os.makedirs(video_dir, exist_ok=True)
+            f = open(video_dir+"/results.txt", "a")
 
         while envs.num_envs > 0 and len(stats_episodes) < num_eps:
             current_episodes = envs.current_episodes()
@@ -358,8 +368,10 @@ class RecollectTrainer(BaseVLNCETrainer):
                     deterministic=not config.EVAL.SAMPLE,
                 )
                 prev_actions.copy_(actions)
-
-            outputs = envs.step([a[0].item() for a in actions])
+            try:
+                outputs = envs.step([a[0].item() for a in actions])
+            except:
+                import ipdb; ipdb.set_trace()
             observations, _, dones, infos = [list(x) for x in zip(*outputs)]
 
             not_done_masks = torch.tensor(
@@ -370,22 +382,44 @@ class RecollectTrainer(BaseVLNCETrainer):
 
             # reset envs and observations if necessary
             for i in range(envs.num_envs):
-                frame = observations_to_image(observations[i], infos[i], append_depth=False, append_map=False)
-                rgb_frames[i].append(frame)
                 high_level_instruction[i] = current_episodes[i].instruction.high_level_instruction
-                import ipdb; ipdb.set_trace()
-                if config.EVAL.SAVE_VIDEO:
-                    frame = observations_to_image(observations[i], infos[i])
-                    _text = text_to_append(current_episodes[i].instruction)
-                    frame = append_text_to_image(frame, _text)
-                    rgb_frames_to_save[i].append(frame)
                 
-                if envs[i]._elapsed_steps % self.config.EVAL.MAX_STEPS_PER_SUBTASK:
-                    next_instruction, summary[i] = self.find_next_instruction(
+                elapsed_steps = envs.call_at(i, "get_elapsed_steps", None)
+                
+                success_detected[i] = envs.call_at(i, "get_is_stop_called", None)
+                # print(f"Is stop called at {elapsed_steps}: {success_detected[i]}")
+
+                # Collect frames at the sub-sampling frequency
+                if elapsed_steps == 1 or elapsed_steps % self.video_subsample == 0:
+                    frame = observations_to_image(observations[i], infos[i], append_depth=False, append_map=False)
+                    rgb_frames[i].append(frame)
+                    # success_detected[i] = self.success_detector(rgb_frames[i][-1], current_instruction[i])
+                
+                extra_text = f"Subgoal success detected: {success_detected[i]}"
+                # Update instruction when sub-task is over
+                if elapsed_steps == 1 \
+                    or elapsed_steps % self.config.EVAL.MAX_STEPS_PER_SUBTASK == 0 \
+                    or success_detected[i]:
+                    
+                    if len(rgb_frames[i]) == 0:
+                        frame = observations_to_image(observations[i], infos[i], append_depth=False, append_map=False)
+                        rgb_frames[i].append(frame)
+                    
+                    current_instruction[i], summary[i] = self.find_next_instruction(
                         summary[i], 
                         rgb_frames[i], 
                         high_level_instruction[i])
-
+                    rgb_frames[i] = []
+                    success_detected[i] = False
+                    envs.call_at(i, "set_is_stop_called", {"is_stop_called": False})
+                    envs.call_at(i, "update_instruction", {"instruction": current_instruction[i]})
+                
+                if config.EVAL.SAVE_VIDEO:
+                    frame = observations_to_image(observations[i], infos[i])
+                    _text = text_to_append(current_episodes[i].instruction, extra_text)
+                    frame = append_text_to_image_fixed_height(frame, _text)
+                    rgb_frames_to_save[i].append(frame)
+                    
                 if not dones[i]:
                     continue
 
@@ -404,7 +438,11 @@ class RecollectTrainer(BaseVLNCETrainer):
                             time=round(time.time() - start_time),
                         )
                     )
+                spl = stats_episodes[ep_id]["spl_rxr"]
 
+                if config.EVAL.SAVE_RESULTS:
+                    f.write(f"Episode id: {ep_id}. SPL: {spl}\n")
+                    f.flush()
                 if config.EVAL.SAVE_VIDEO:
                     generate_video(
                         video_option=config.EVAL.VIDEO_SAVE_LOC,
@@ -449,7 +487,9 @@ class RecollectTrainer(BaseVLNCETrainer):
                 batch,
                 rgb_frames,
             )
-
+        
+        if config.EVAL.SAVE_RESULTS:
+            f.close()
         envs.close()
         if config.use_pbar:
             pbar.close()
@@ -474,14 +514,13 @@ class RecollectTrainer(BaseVLNCETrainer):
             logger.info(f"{k}: {v:.6f}")
             writer.add_scalar(f"eval_{split}_{k}", v, checkpoint_num)
     
-
     def load_vlm(self, name):
         if 'gemini' in name:
             from vlnce_baselines.common.utils import get_gemini_vision_model
             self.gemini_vlm = get_gemini_vision_model()
         elif 'blip' in name:
             from vlnce_baselines.common.utils import get_blip2_model
-            self.blip2_processor, self.blip2_model = get_blip2_model()
+            self.blip2_processor, self.blip2_model = get_blip2_model(self.device)
         else:
             raise NotImplementedError(f" VLM: {name} not available.")
 
@@ -494,6 +533,23 @@ class RecollectTrainer(BaseVLNCETrainer):
         else:
             raise NotImplementedError(f" LLM: {name} not available.")
     
+    def get_gemini_vlm_output(self, img, prompt):
+        next_instruction = self.gemini_vlm.generate_content([prompt, img])
+        next_instruction.resolve()
+        return next_instruction.text
+
+    def get_blip2_vlm_output(self, img, prompt):
+        inputs = self.blip2_processor(img, text=prompt, return_tensors="pt").to(self.device, torch.float16)
+        generated_ids = self.blip2_model.generate(**inputs, max_new_tokens=40)
+        return self.blip2_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+
+    def get_vlm_output(self, image, prompt):
+        if 'blip' in self.vl_model:
+            generated_text = self.get_blip2_vlm_output(image, prompt)
+        elif 'gemini' in self.vl_model:
+            generated_text = self.get_gemini_vlm_output(image, prompt)
+        return generated_text
+
     def llm_summary(self, summary_text):
         llm_summary_prompt = "A person made the following consecutive observations while " \
              "navigating a house. Very concisely describe the layout of the house seen so far "\
@@ -502,8 +558,8 @@ class RecollectTrainer(BaseVLNCETrainer):
         if 'gemini' in self.ll_model:
             new_summary = self.gemini_llm.generate_content(f"{llm_summary_prompt} Observations: {summary_text}")
             new_summary.resolve()
-        elif 'gpt' in self.ll_models:
-            import openai
+        elif 'gpt' in self.ll_model:
+            
             messages=[
                 {"role": "system", "content": llm_summary_prompt},
                 {"role": "user", "content": f"Observations: '{summary_text}'"}
@@ -520,18 +576,11 @@ class RecollectTrainer(BaseVLNCETrainer):
         
         video_description = [prev_summary]
         for i, im in enumerate(video):
-            if i % self.video_subsample == 0:
-                image = Image.fromarray(im).convert('RGB')
-                if 'blip' in self.vl_model:
-                    inputs = self.blip2_processor(image, text=describe_img_prompt, return_tensors="pt").to(self.device, torch.float16)
-                    generated_ids = self.blip2_model.generate(**inputs, max_new_tokens=40)
-                    generated_text = self.blip2_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-                    video_description.append(generated_text)
-                elif 'gemini' in self.vl_model:
-                    generated_text = self.gemini_vlm.generate_content([describe_img_prompt, image])
-                    generated_text.resolve()
-                    video_description.append(generated_text.text)
-        
+            # if i % self.video_subsample == 0:
+            image = Image.fromarray(im).convert('RGB')
+            generated_text = self.get_vlm_output(image, describe_img_prompt)
+            video_description.append(generated_text)
+    
         # Summarize episode
         video_description.append(" ' ")
         video_description_input = " ".join(video_description)
@@ -539,29 +588,51 @@ class RecollectTrainer(BaseVLNCETrainer):
         return new_summary
     
     def get_next_instruction_from_context(self, current_img, high_level_instruction, summary):
-        next_instruction_prompt = f"You are a robot navigating a house. "\
-            "You get a high level instruction ({high_level_instruction}) "\
-            "of where to go and a summary ({summary}) of what you have seen in the house so far. "\
-            "The image shows where you are right now. To which visible landmark "\
-            "should you move next to get nearer to high level goal."
+        if self.config.EVAL.USE_SUMMARY:
+            next_instruction_prompt = f"You are a robot navigating a house. "\
+                f"You get a high level instruction: ({high_level_instruction}) "\
+                f"of where to go and a summary: ({summary}) of what you have seen in the house so far. "\
+                "The image shows where you are right now. "\
+                "To which visible landmark should you move next to get nearer to high level goal. Be concise and give one short sentence answer."
+        else:
+            next_instruction_prompt = f"You are a robot navigating a house. "\
+                f"You get a high level instruction: ({high_level_instruction}) "\
+                f"of where to go."\
+                "The image shows where you are right now. "\
+                "What should be the next instruction such that the robot goes closer to performing the high level instruction? " \
+                "Give concise answers such as"\
+                " 'Go up the stairs'," \
+                " 'Goto the painting on the wall', "\
+                " 'Go around the bed', "\
+                " 'Go through the door on the left', etc."
         
-        if 'blip' in self.vl_model:
-            inputs = self.blip2_processor(
-                current_img, 
-                text=next_instruction_prompt, 
-                return_tensors="pt").to(self.device, torch.float16)
-            generated_ids = self.blip2_model.generate(**inputs, max_new_tokens=40)
-            next_instruction = self.blip2_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-        elif 'gemini' in self.vl_model:
-            next_instruction = self.gemini_vlm.generate_content([next_instruction_prompt, current_img])
-            next_instruction.resolve()
-            next_instruction = next_instruction.text
-        return next_instruction
+        current_img= Image.fromarray(current_img).convert('RGB')
+        generated_text = self.get_vlm_output(current_img, next_instruction_prompt)
+
+        return generated_text
 
     def find_next_instruction(self, summary, video, high_level_instruction):
-        new_summary = self.summarize_video(summary, video)
+        new_summary = ''
+        if self.config.EVAL.USE_SUMMARY:
+            new_summary = self.summarize_video(summary, video)
         next_instruction = self.get_next_instruction_from_context(video[-1], high_level_instruction, new_summary)
         return next_instruction, new_summary
+
+    def success_detector(self, current_image, current_instruction):
+        success_detector_prompt = f"Have you completed the instruction specified in {current_instruction}? "\
+                f"You should be within a few feet of the goal for the task to be considered completed. "\
+                f"Give only True or False as the answer"
+        
+        current_image = Image.fromarray(current_image).convert('RGB')
+        generated_text = self.get_vlm_output(current_image, success_detector_prompt)
+        if 'true' in generated_text.lower():
+            return True
+        elif 'false' in generated_text.lower():
+            return True
+        else:
+            print(f"Unacceptable output returned")
+            import ipdb; ipdb.set_trace()
+        
 
 
 

@@ -22,12 +22,19 @@ conda create -n vlnce python3.6
 conda activate vlnce
 ```
 
+First install torch:
+```
+pip install torch torchvision torchaudio
+```
+
 VLN-CE uses [Habitat-Sim](https://github.com/facebookresearch/habitat-sim/tree/v0.1.7) 0.1.7 which can be [built from source](https://github.com/facebookresearch/habitat-sim/tree/v0.1.7#installation) or installed from conda:
 
 ```bash
+# Works with python 3.8
 conda install -c aihabitat -c conda-forge habitat-sim=0.1.7 headless
+# Works with python 3.9
+conda install -c aihabitat -c conda-forge habitat-sim headless
 ```
-
 Then install [Habitat-Lab](https://github.com/facebookresearch/habitat-lab/tree/v0.1.7):
 
 ```bash
@@ -48,6 +55,10 @@ cd VLN-CE
 python -m pip install -r requirements.txt
 ```
 
+(Optional) Install gemini (works with python 3.9):
+```bash
+pip install -q -U google-generativeai
+```
 ### Data
 
 #### Scenes: Matterport3D

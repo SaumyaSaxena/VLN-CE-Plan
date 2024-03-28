@@ -84,7 +84,7 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
         trainer.train()
     elif run_type == "eval":
         print("---------------------Evaluating on split", config.EVAL.SPLIT)
-        trainer.eval(context=False)
+        trainer.eval(context=config.get('CONTEXT_LEARNING', False))
     elif run_type == "inference":
         trainer.inference()
 

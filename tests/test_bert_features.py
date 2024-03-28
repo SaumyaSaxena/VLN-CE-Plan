@@ -6,7 +6,8 @@ import gzip, json
 
 def make_bert_preprocess_model(seq_length=128):
     input_segments = tf.keras.layers.Input(shape=(), dtype=tf.string)
-    preprocessor = hub.load('/home/sax1rng/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_preprocess_3/')
+    preprocessor = hub.load('/home/saumyas/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_preprocess_3/')
+
     tok = preprocessor.tokenize(tf.constant(['Hello TensorFlow!']))
 
     tokenizer = hub.KerasLayer(preprocessor.tokenize, name='tokenizer')
@@ -20,14 +21,14 @@ def make_bert_preprocess_model(seq_length=128):
     return tf.keras.Model(input_segments, model_inputs)
 
 def load_text_features(instruction_id):
-    feature_file = "/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/text_features/rxr_train/{id:06}_en_text_features.npz"
+    feature_file = "/home/saumyas/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/text_features/rxr_train/{id:06}_en_text_features.npz"
     feature_file = feature_file.format(id=int(instruction_id))
     return np.load(feature_file)
 
 if __name__== "__main__":
     # Loading text instructions
     data_type = 'train'
-    data_locations = [f'/home/sax1rng/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_guide.json.gz']
+    data_locations = [f'/home/saumyas/Projects/VLN-CE-Plan/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_guide.json.gz']
     data = {}
     for data_file in data_locations:
         with gzip.open(data_file,"rt",) as f:
@@ -42,11 +43,26 @@ if __name__== "__main__":
     print("presaved bert shape tokens",saved_features['tokens'].shape)
     print("presaved bert shape features",saved_features['features'].shape)
 
+    if False:
+        text_input = tf.keras.layers.Input(shape=(), dtype=tf.string)
+        preprocessor = hub.KerasLayer(
+            "https://kaggle.com/models/tensorflow/bert/frameworks/TensorFlow2/variations/multi-cased-preprocess/versions/3")
+        encoder_inputs = preprocessor(text_input)
+        encoder = hub.KerasLayer(
+            "https://www.kaggle.com/models/tensorflow/bert/frameworks/TensorFlow2/variations/multi-cased-l-12-h-768-a-12/versions/4",
+            trainable=True)
+        outputs = encoder(encoder_inputs)
+        pooled_output = outputs["pooled_output"]      # [batch_size, 768].
+        sequence_output = outputs["sequence_output"]  # [batch_size, seq_length, 768].
 
-    test=True
-    if test:
+        embedding_model = tf.keras.Model(text_input, pooled_output)
+        output_features = embedding_model(sentences)
+        import ipdb; ipdb.set_trace()
+
+
+    if True:
         preprocess_model = make_bert_preprocess_model()
-        encoder = hub.KerasLayer('/home/sax1rng/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_L-12_H-768_A-12_4/',trainable=True)
+        encoder = hub.KerasLayer('/home/saumyas/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_L-12_H-768_A-12_4/',trainable=True)
         preprocessed_input = preprocess_model(sentences)
         output = encoder(preprocessed_input)
         token_mask = preprocessed_input['input_mask']==1
@@ -57,12 +73,14 @@ if __name__== "__main__":
 
         diff = np.max(saved_features['features'] - output_tokens)
         import ipdb; ipdb.set_trace()
-    else:
+    
+    
+    if False:
         text_input = tf.keras.layers.Input(shape=(), dtype=tf.string)
-        preprocessor = hub.KerasLayer('/home/sax1rng/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_preprocess_3/')
+        preprocessor = hub.KerasLayer('/home/saumyas/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_preprocess_3/')
         encoder_inputs = preprocessor(text_input)
 
-        encoder = hub.KerasLayer('/home/sax1rng/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_L-12_H-768_A-12_4/',trainable=True)
+        encoder = hub.KerasLayer('/home/saumyas/Projects/VLN-CE-Plan/data/bert_models/bert_multi_cased_L-12_H-768_A-12_4/',trainable=True)
         outputs = encoder(encoder_inputs)
         pooled_output = outputs["pooled_output"]      # [batch_size, 768].
         sequence_output = outputs["sequence_output"]  # [batch_size, seq_length, 768].

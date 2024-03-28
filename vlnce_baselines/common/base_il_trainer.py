@@ -236,15 +236,16 @@ class BaseVLNCETrainer(BaseILTrainer):
         ckpt_cmd_opts = checkpoint_config.get('CMD_TRAILING_OPTS', [])
         eval_cmd_opts = config.CMD_TRAILING_OPTS
         eval_config = Config({'EVAL': config.EVAL})
-        eval_task_config = Config({'TASK_CONFIG': {'TASK': config.EVAL.EVAL_TASK}})
-        eval_common_conig = Config(config.EVAL.COMMON)
+        eval_task_config = Config({'TASK_CONFIG': config.EVAL.EVAL_TASK_CONFIG})
+        eval_common_config = Config(config.EVAL.COMMON)
+        
 
         try:
             # config.merge_from_other_cfg(self.config)
             config.merge_from_other_cfg(checkpoint_config['config']) # Evaluation should be done based on the training config
             config.merge_from_other_cfg(eval_config) # EVAL cfg settings should be updated
             config.merge_from_other_cfg(eval_task_config) # EVAL_TASK cfg settings should be updated
-            config.merge_from_other_cfg(eval_common_conig) # EVAL_TASK cfg settings should be updated
+            config.merge_from_other_cfg(eval_common_config) # EVAL_TASK cfg settings should be updated
             config.merge_from_list(ckpt_cmd_opts)
             config.merge_from_list(eval_cmd_opts)
         except KeyError:
@@ -389,7 +390,6 @@ class BaseVLNCETrainer(BaseILTrainer):
             action_space=action_space,
         )
         self.policy.eval()
-
         observations = envs.reset()
 
         observations = extract_instruction_tokens(
