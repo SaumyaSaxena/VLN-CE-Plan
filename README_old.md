@@ -18,7 +18,7 @@ Vision and Language Navigation in Continuous Environments (VLN-CE) is an instruc
 This project is developed with Python 3.6. If you are using [miniconda](https://docs.conda.io/en/latest/miniconda.html) or [anaconda](https://anaconda.org/), you can create an environment:
 
 ```bash
-conda create -n vlnce python3.9
+conda create -n vlnce python3.6
 conda activate vlnce
 ```
 
@@ -27,14 +27,14 @@ First install torch:
 pip install torch torchvision torchaudio
 ```
 
-VLN-CE uses Habitat-Sim [built from source](https://github.com/facebookresearch/habitat-sim/tree/v0.1.7#installation)
-```bash
-git clone --branch v0.1.7 https://github.com/facebookresearch/habitat-sim.git
-cd habitat-sim
-pip install -r requirements.txt
-python setup.py install --with-cuda --headless
-```
+VLN-CE uses [Habitat-Sim](https://github.com/facebookresearch/habitat-sim/tree/v0.1.7) 0.1.7 which can be [built from source](https://github.com/facebookresearch/habitat-sim/tree/v0.1.7#installation) or installed from conda:
 
+```bash
+# Works with python 3.8
+conda install -c aihabitat -c conda-forge habitat-sim=0.1.7 headless
+# Works with python 3.9
+conda install -c aihabitat -c conda-forge habitat-sim headless
+```
 Then install [Habitat-Lab](https://github.com/facebookresearch/habitat-lab/tree/v0.1.7):
 
 ```bash
