@@ -29,7 +29,8 @@ class VLNCEDaggerEnv(habitat.RLEnv):
         return self.habitat_env.get_metrics()["success"]
 
     def get_done(self, observations: Observations) -> bool:
-        return self._episode_success()
+        # return self._episode_success()
+        return self._env.episode_over
 
     def get_is_stop_called(self) -> int:
         return self._env.task.is_stop_called

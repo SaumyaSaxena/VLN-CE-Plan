@@ -24,7 +24,7 @@ python scripts/save_subtask_episodes_rollout.py
 python scripts/reformat_data_to_combine_non_fwd_eps.py
 ```
 
-## Save BERT features for the new instructions
+## Generate and save BERT features for the instructions
 Download the BERT model ([reference](https://colab.research.google.com/github/tensorflow/text/blob/master/docs/tutorials/classify_text_with_bert.ipynb)):
 ```
 wget "https://tfhub.dev/tensorflow/bert_multi_cased_L-12_H-768_A-12/4?tf-hub-format=compressed" -O bert_multi_cased_L-12_H-768_A-12_4.tar.gz
@@ -41,18 +41,8 @@ mkdir -p VLN-CE-Plan/data/bert_models/bert_multi_cased_preprocess_3
 tar -xf bert_multi_cased_preprocess_3.tar.gz -C VLN-CE-Plan/data/bert_models/bert_multi_cased_preprocess_3
 ```
 
-Finally, generate BERT for the sub-instructions:
+Finally, generate BERT features:
 ```
-python scripts/save_bert_features_subtasks.py
+cd scripts
+python save_bert_features.py --instr_type full/subtask/high_level --data_type train/val_seen/val_unseen --role guide/follower
 ```
-
-# Training and evaluation
-
-## Training for subtask policies
-```
-python run.py --exp-config vlnce_baselines/config/rxr_baselines/rxr_cma_en_subtasks.yaml --run-type train/eval
-```
-
-# Context learning
-
-## Testing on ground truth trajectories/videos

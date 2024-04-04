@@ -2,7 +2,7 @@ BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_task.yaml
 TRAINER_NAME: recollect_trainer
 SIMULATOR_GPU_IDS: [0, 1]
 TORCH_GPU_ID: 0
-NUM_ENVIRONMENTS: 5
+NUM_ENVIRONMENTS: 1
 TENSORBOARD_DIR: outputs/rxr_cma_en
 CHECKPOINT_FOLDER: outputs/rxr_cma_en
 

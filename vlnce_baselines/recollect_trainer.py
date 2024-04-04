@@ -105,6 +105,19 @@ class RecollectTrainer(BaseVLNCETrainer):
             observation_space=dataset.observation_space,
             action_space=dataset.action_space,
         )
+        
+        trainable_size = np.sum([np.prod(p.shape) for p in self.policy.parameters() if p.requires_grad])
+        all_params_size = np.sum([np.prod(p.shape) for p in self.policy.parameters()])
+        print(f"all: {all_params_size}, trainable: {trainable_size}")
+    
+        if trainable_size > 1e9:
+            print(f'{float(trainable_size) / 1e9:.2f} G ({trainable_size})')
+        elif trainable_size > 1e6:
+            print(f'{float(trainable_size) / 1e6:.2f} M ({trainable_size})')
+        elif trainable_size > 1e3:
+            print(f'{float(trainable_size) / 1e3:.2f} K ({trainable_size})')
+        else:
+            print(f'{float(trainable_size):.2f}')
 
         if self.config.IL.RECOLLECT_TRAINER.effective_batch_size > 0:
             assert (

@@ -136,6 +136,7 @@ dmypy.json
 data
 logs
 outputs
+cache_dir
 
 # VSCode
 .vscode
