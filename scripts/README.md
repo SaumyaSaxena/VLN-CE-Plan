@@ -43,6 +43,5 @@ tar -xf bert_multi_cased_preprocess_3.tar.gz -C VLN-CE-Plan/data/bert_models/ber
 
 Finally, generate BERT features:
 ```
-cd scripts
-python save_bert_features.py --instr_type full/subtask/high_level --data_type train/val_seen/val_unseen --role guide/follower
+python scripts/save_bert_features.py --instr_type full/subtask/high_level --data_type train/val_seen/val_unseen --role guide/follower
 ```

@@ -15,7 +15,6 @@ Vision and Language Navigation in Continuous Environments (VLN-CE) is an instruc
 
 ## Setup
 
-
 ### Create conda environment
 
 This project is developed with Python 3.6. If you are using [miniconda](https://docs.conda.io/en/latest/miniconda.html) or [anaconda](https://anaconda.org/), you can create an environment:
@@ -61,10 +60,10 @@ python setup.py develop --all
 ### Install VLN_CE_Plan
 
 ```bash
-git clone git@github.com:jacobkrantz/VLN-CE.git
-cd VLN-CE
+git clone git@github.com:SaumyaSaxena/VLN-CE-Plan.git
+cd VLN-CE-Plan
 # Comment out torch and tensorflow from the requirements files
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
 ### Install Generative model APIs

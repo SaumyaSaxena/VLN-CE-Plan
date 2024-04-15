@@ -381,10 +381,9 @@ class RecollectTrainer(BaseVLNCETrainer):
                     deterministic=not config.EVAL.SAMPLE,
                 )
                 prev_actions.copy_(actions)
-            try:
-                outputs = envs.step([a[0].item() for a in actions])
-            except:
-                import ipdb; ipdb.set_trace()
+            
+            outputs = envs.step([a[0].item() for a in actions])
+
             observations, _, dones, infos = [list(x) for x in zip(*outputs)]
 
             not_done_masks = torch.tensor(

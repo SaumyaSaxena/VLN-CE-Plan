@@ -464,10 +464,8 @@ class BaseVLNCETrainer(BaseILTrainer):
 
                 ep_id = current_episodes[i].episode_id
                 stats_episodes[ep_id] = infos[i]
-                try:
-                    observations[i] = envs.reset_at(i)[0]
-                except:
-                    import ipdb; ipdb.set_trace()
+                
+                observations[i] = envs.reset_at(i)[0]
                 prev_actions[i] = torch.zeros(1, dtype=torch.long)
 
                 if config.use_pbar:

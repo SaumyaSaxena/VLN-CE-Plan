@@ -10,14 +10,13 @@ import argparse
 
 def load_data(data_type='train', role='guide', instr_type='full'):
     if instr_type == 'full':
-        data_loc = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}.json.gz'
+        data_loc = f'{cwd}/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}.json.gz'
     elif instr_type == 'subtask':
-        data_loc = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_subtasks_rollouts_merged_hli.json.gz'
+        data_loc = f'{cwd}/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_subtasks_rollouts_merged_hli.json.gz'
     elif instr_type == 'high_level':
-        data_loc = f'{cwd}/../data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_high_level_instr.json.gz'
+        data_loc = f'{cwd}/data/datasets/RxR_VLNCE_v0/{data_type}/{data_type}_{role}_high_level_instr.json.gz'
     else:
         raise NotImplementedError(f" Intruction type: {instr_type} not defined")
-    
     data = {}
     with gzip.open(data_loc,"rt",) as f:
         data.update(json.load(f))
@@ -25,11 +24,11 @@ def load_data(data_type='train', role='guide', instr_type='full'):
 
 def get_save_dir(data_type='train', role='guide', instr_type='full'):
     if instr_type == 'full':
-        save_dir = f'{cwd}/../data/datasets/RxR_VLNCE_v0/text_features/rxr_{data_type}/'
+        save_dir = f'{cwd}/data/datasets/RxR_VLNCE_v0/text_features/rxr_{data_type}/'
     elif instr_type == 'subtask':
-        save_dir = f'{cwd}/../data/datasets/RxR_VLNCE_v0/text_features_subtasks_merged/rxr_{data_type}/'
+        save_dir = f'{cwd}/data/datasets/RxR_VLNCE_v0/text_features_subtasks_merged/rxr_{data_type}/'
     elif instr_type == 'high_level':
-        save_dir = f'{cwd}/../data/datasets/RxR_VLNCE_v0/text_features_highlevel_instr/rxr_{data_type}/'
+        save_dir = f'{cwd}/data/datasets/RxR_VLNCE_v0/text_features_highlevel_instr/rxr_{data_type}/'
     else:
         raise NotImplementedError(f" Intruction type: {instr_type} not defined")
 
@@ -37,7 +36,7 @@ def get_save_dir(data_type='train', role='guide', instr_type='full'):
 
 def make_bert_preprocess_model(seq_length=128):
     input_segments = tf.keras.layers.Input(shape=(), dtype=tf.string)
-    preprocessor = hub.load(f'{cwd}/../data/bert_models/bert_multi_cased_preprocess_3/')
+    preprocessor = hub.load(f'{cwd}/data/bert_models/bert_multi_cased_preprocess_3/')
 
     tokenizer = hub.KerasLayer(preprocessor.tokenize, name='tokenizer')
     tokenized_input = [tokenizer(input_segments)]
@@ -50,7 +49,7 @@ def make_bert_preprocess_model(seq_length=128):
 
 def load_model():
     preprocess_model = make_bert_preprocess_model()
-    encoder = hub.KerasLayer(f'{cwd}/../data/bert_models/bert_multi_cased_L-12_H-768_A-12_4/',trainable=True)
+    encoder = hub.KerasLayer(f'{cwd}/data/bert_models/bert_multi_cased_L-12_H-768_A-12_4/',trainable=True)
     return preprocess_model, encoder
 
 if __name__== "__main__":
