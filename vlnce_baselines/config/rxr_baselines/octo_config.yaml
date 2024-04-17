@@ -24,6 +24,18 @@ viz_kwargs:
   trajs_for_metrics: 100
   trajs_for_viz: 8
 
+text_processor:
+  args: []
+  kwargs:
+    encode_with_model: false
+    tokenizer_kwargs:
+      max_length: 16
+      padding: max_length
+      return_tensors: np
+      truncation: true
+    tokenizer_name: t5-base
+  module: vlnce_baselines.models.octo.text_processing
+  name: HFTokenizer
 
 dataset_kwargs:
   balance_weights: true
@@ -104,6 +116,7 @@ model:
         pred_horizon: 4
         readout_key: readout_action
         use_map: false
+        embedding_size: ${model.token_embedding_size}
       module: vlnce_baselines.models.octo.action_heads
       name: DiffusionActionHead
   max_horizon: 10
@@ -146,6 +159,7 @@ model:
         finetune_encoder: false
       module: vlnce_baselines.models.octo.tokenizers
       name: LanguageTokenizer
+  max_tokens: ${text_processor.kwargs.tokenizer_kwargs.max_length}
   token_embedding_size: 384
   transformer_kwargs:
     add_position_embedding: false
@@ -174,20 +188,6 @@ pretrained_loaders:
     hf_model: t5-base
   module: octo.utils.train_utils
   name: hf_weights_loader
-
-
-text_processor:
-  args: []
-  kwargs:
-    encode_with_model: false
-    tokenizer_kwargs:
-      max_length: 16
-      padding: max_length
-      return_tensors: np
-      truncation: true
-    tokenizer_name: t5-base
-  module: vlnce_baselines.models.octo.text_processing
-  name: HFTokenizer
 
 val_kwargs:
   num_val_batches: 16

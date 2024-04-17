@@ -12,9 +12,7 @@ from vlnce_baselines.models.octo.transformer import MAPHead
 from vlnce_baselines.models.octo.spec import ModuleSpec
 
 
-
 EPS = 1e-6
-
 
 def generate_proper_pad_mask(
     tokens: torch.Tensor,
@@ -46,11 +44,16 @@ class TokenLearner(nn.Module):
         bottleneck_dim (int): Size of the hidden layers of the mapping MLP.
         dropout_rate (float): Rate of dropout applied in the mapping MLP. Defaults to no dropout.
     """
+    def __init__(self, num_tokens: int):
+        super().__init__()
 
-    num_tokens: int
+        self.pos_emb = nn.Embedding(num_readouts, dim) # TODO(saumya)
+        self.map_head = MAPHead(num_readouts=num_tokens)
+    
+    def reset_parameters(self):
+        nn.init.normal_(self.pos_emb.weight)
 
-
-    def __call__(self, inputs, train: bool = True):
+    def forward(self, inputs, train: bool = True):
         pos_embed = self.param(
             "pos_embed",
             nn.initializers.normal(stddev=0.02),
@@ -58,7 +61,7 @@ class TokenLearner(nn.Module):
         )
         x = inputs + torch.broadcast_to(pos_embed, inputs.shape)
         x = nn.LayerNorm()(x)
-        return MAPHead(num_readouts=self.num_tokens)(x, train=train)
+        return self.map_head(x, train=train)
 
 
 def regex_match(regex_keys, x):
@@ -81,17 +84,28 @@ class ImageTokenizer(nn.Module):
         task_film_keys (Sequence[str]): Which non-spatial task keys get passed into FiLM conditioning. Supports regex.
     """
 
-    encoder: ModuleSpec
-    use_token_learner: bool = False
-    num_tokens: int = 8
-    conditioning_type: str = "none"
-    obs_stack_keys: Sequence[str] = ("image_.*", "depth_.*")
-    task_stack_keys: Sequence[str] = tuple()
-    task_film_keys: Sequence[str] = tuple()
-    proper_pad_mask: bool = True
+    def __init__(self,
+        encoder: ModuleSpec,
+        use_token_learner: bool = False,
+        num_tokens: int = 256,
+        conditioning_type: str = "none",
+        obs_stack_keys: Sequence[str] = ("image_.*", "depth_.*"),
+        task_stack_keys: Sequence[str] = tuple(),
+        task_film_keys: Sequence[str] = tuple(),
+        proper_pad_mask: bool = True,
+    ):
+        super().__init__()
+        self.use_token_learner = use_token_learner
+        self.num_tokens = num_tokens
+        self.conditioning_type = conditioning_type
+        self.obs_stack_keys = obs_stack_keys
+        self.task_stack_keys = task_stack_keys
+        self.task_film_keys = task_film_keys
+        self.proper_pad_mask = proper_pad_mask
 
-
-    def __call__(
+        self.encoder_def = ModuleSpec.instantiate(encoder)()
+    
+    def forward(
         self,
         observations,
         tasks=None,
@@ -149,8 +163,7 @@ class ImageTokenizer(nn.Module):
             )
 
         # run visual encoder
-        encoder_def = ModuleSpec.instantiate(self.encoder)()
-        image_tokens = encoder_def(enc_inputs, **encoder_input_kwargs)
+        image_tokens = self.encoder_def(enc_inputs, **encoder_input_kwargs)
         image_tokens = torch.reshape(image_tokens, (b, t, -1, image_tokens.shape[-1]))
 
         if self.use_token_learner:
@@ -188,6 +201,7 @@ class LanguageTokenizer(nn.Module):
             from transformers import AutoConfig, FlaxAutoModel, FlaxT5EncoderModel
 
             config = AutoConfig.from_pretrained(self.encoder)
+            self.hidden_dim = config.d_model
             if "t5" in self.encoder:
                 self.hf_model = FlaxT5EncoderModel(config).module
             else:

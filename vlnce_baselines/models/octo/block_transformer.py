@@ -115,12 +115,13 @@ def split_tokens(ary: torch.Tensor, n_tokens_per_group: Sequence[int], axis: int
 class BlockTransformer(nn.Module):
     """A transformer that acts on multiple groups of tokens, which may attend to each other (in complex patterns)."""
 
-    # Forwarded to Transformer
-    transformer_kwargs: Dict
-    # Enforce that timestep causal structure is not broken (future timesteps can't attend to past timesteps)
-    enforce_causal: bool = True
+    def __init__(self, transformer_kwargs: Dict, enforce_causal: bool = True):
+        super().__init__()
+        # Enforce that timestep causal structure is not broken (future timesteps can't attend to past timesteps)
+        self.enforce_causal = enforce_causal
+        self.transformer = Transformer(**transformer_kwargs)
 
-    def __call__(
+    def forward(
         self,
         prefix_groups: Sequence[PrefixGroup],
         timestep_groups: Sequence[TimestepGroup],
@@ -169,7 +170,7 @@ class BlockTransformer(nn.Module):
         self.sow("intermediates", "attention_mask", attention_mask)
 
         # Run transformer
-        output = Transformer(**self.transformer_kwargs)(
+        output = self.transformer(
             input_tokens, attention_mask, train=train
         )
 

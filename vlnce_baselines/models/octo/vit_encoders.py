@@ -9,10 +9,12 @@ Encoders more suitable for ViT architectures.
 import functools as ft
 from typing import Callable, Sequence, TypeVar
 
-from flax import linen as nn
-import jax.numpy as jnp
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
 
-from octo.model.components.film_conditioning_layer import FilmConditioning
+
+from vlnce_baselines.models.octo.film_conditioning_layer import FilmConditioning
 
 T = TypeVar("T")
 
@@ -20,42 +22,62 @@ T = TypeVar("T")
 def normalize_images(img, img_norm_type="default"):
     if img_norm_type == "default":
         # put pixels in [-1, 1]
-        return img.astype(jnp.float32) / 127.5 - 1.0
+        return img.astype(torch.float32) / 127.5 - 1.0
     elif img_norm_type == "imagenet":
         # put pixels in [0,1]
-        img = img.astype(jnp.float32) / 255
+        img = img.astype(torch.float32) / 255
         assert img.shape[-1] % 3 == 0, "images should have rgb channels!"
 
         # define pixel-wise mean/std stats calculated from ImageNet
-        mean = jnp.array([0.485, 0.456, 0.406]).reshape((1, 1, 1, 3))
-        std = jnp.array([0.229, 0.224, 0.225]).reshape((1, 1, 1, 3))
+        mean = torch.tensor([0.485, 0.456, 0.406]).reshape((1, 1, 1, 3))
+        std = torch.tensor([0.229, 0.224, 0.225]).reshape((1, 1, 1, 3))
 
         # tile mean and std (to account for stacked early_fusion images)
         num_tile = (1, 1, 1, int(img.shape[-1] / 3))
-        mean_tile = jnp.tile(mean, num_tile)
-        std_tile = jnp.tile(std, num_tile)
+        mean_tile = torch.tile(mean, num_tile)
+        std_tile = torch.tile(std, num_tile)
 
         # tile the mean/std, normalize image, and return
         return (img - mean_tile) / std_tile
     raise ValueError()
 
 
-def weight_standardize(w, axis, eps):
-    """Subtracts mean and divides by standard deviation."""
-    w = w - jnp.mean(w, axis=axis)
-    w = w / (jnp.std(w, axis=axis) + eps)
-    return w
+def weight_standardize(weight: torch.Tensor, eps: float):
+    """Subtracts mean and divides by standard deviation.
+    https://nn.labml.ai/normalization/weight_standardization/index.html
+    """
+    c_out, c_in, *kernel_shape = weight.shape
+    weight = weight.view(c_out, -1)
+    var, mean = torch.var_mean(weight, dim=1, keepdim=True)
+    weight = (weight - mean) / (torch.sqrt(var + eps))
+    return weight.view(c_out, c_in, *kernel_shape)
 
 
-class StdConv(nn.Conv):
-    """Convolution with weight standardization."""
+class StdConv(nn.Conv2d):
+    """Convolution with weight standardization.
+    https://nn.labml.ai/normalization/weight_standardization/conv2d.html
+    """
+    def __init__(self, in_channels, out_channels, kernel_size,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups: int = 1,
+        bias: bool = True,
+        padding_mode: str = 'zeros',
+        eps: float = 1e-5
+    ):
+        super(StdConv, self).__init__(in_channels, out_channels, kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+            padding_mode=padding_mode
+        )
+        self.eps = eps
 
-    def param(self, name: str, init_fn: Callable[..., T], *init_args) -> T:
-        param = super().param(name, init_fn, *init_args)
-        if name == "kernel":
-            param = weight_standardize(param, axis=[0, 1, 2], eps=1e-5)
-        return param
-
+    def forward(self, x: torch.Tensor):
+        return F.conv2d(x, weight_standardize(self.weight, self.eps), self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 class PatchEncoder(nn.Module):
     """Takes an image and breaks it up into patches of size (patch_size x patch_size),
@@ -69,7 +91,7 @@ class PatchEncoder(nn.Module):
     num_features: int = 512
     img_norm_type: str = "default"
 
-    def __call__(self, observations: jnp.ndarray, train: bool = True, cond_var=None):
+    def __call__(self, observations: torch.Tensor, train: bool = True, cond_var=None):
         expecting_cond_var = self.use_film
         received_cond_var = cond_var is not None
         assert (
@@ -96,16 +118,57 @@ class SmallStem(nn.Module):
     See Xiao et al: Early Convolutions Help Transformers See Better
     """
 
-    use_film: bool = False
-    patch_size: int = 32
-    kernel_sizes: tuple = (3, 3, 3, 3)
-    strides: tuple = (2, 2, 2, 2)
-    features: tuple = (32, 96, 192, 384)
-    padding: tuple = (1, 1, 1, 1)
-    num_features: int = 512
-    img_norm_type: str = "default"
+    def __init__(self,
+        use_film: bool = False,
+        patch_size: int = 32,
+        kernel_sizes: tuple = (3, 3, 3, 3),
+        strides: tuple = (2, 2, 2, 2),
+        features: tuple = (32, 96, 192, 384),
+        padding: tuple = (1, 1, 1, 1),
+        num_features: int = 512,
+        img_norm_type: str = "default",
+    ):
+        super().__init__()
+        self.use_film = use_film
+        self.patch_size = patch_size
+        self.kernel_sizes = kernel_sizes
+        self.strides = strides
+        self.features = features
+        self.padding = padding
+        self.num_features = num_features
+        self.img_norm_type = img_norm_type
 
-    def __call__(self, observations: jnp.ndarray, train: bool = True, cond_var=None):
+        self.std_convs, self.group_norms = [], []
+        for n, (kernel_size, stride, feature, padding) in enumerate(
+            zip(
+                kernel_sizes,
+                strides,
+                features,
+                padding,
+            )
+        ):
+            self.std_convs.append(
+                StdConv(
+                    features=features,
+                    kernel_size=(kernel_size, kernel_size),
+                    stride=(stride, stride),
+                    padding=padding,
+                )
+            )
+            self.group_norms.append(nn.GroupNorm(feature, feature))
+            
+        self.conv = nn.Conv2d(
+            in_channels=features[-1],
+            out_channels=num_features,
+            kernel_size=(patch_size // 16, patch_size // 16),
+            stride=(patch_size // 16, patch_size // 16),
+            padding="VALID",
+        )
+
+        if use_film:
+            self.film_conditioning = FilmConditioning()
+
+    def forward(self, observations: torch.Tensor, train: bool = True, cond_var=None):
         expecting_cond_var = self.use_film
         received_cond_var = cond_var is not None
         assert (
@@ -113,7 +176,7 @@ class SmallStem(nn.Module):
         ), "Only pass in cond var iff model expecting cond var"
 
         x = normalize_images(observations, self.img_norm_type)
-        for n, (kernel_size, stride, features, padding) in enumerate(
+        for n, (kernel_size, stride, feature, padding) in enumerate(
             zip(
                 self.kernel_sizes,
                 self.strides,
@@ -121,25 +184,14 @@ class SmallStem(nn.Module):
                 self.padding,
             )
         ):
-            x = StdConv(
-                features=features,
-                kernel_size=(kernel_size, kernel_size),
-                strides=(stride, stride),
-                padding=padding,
-            )(x)
-            x = nn.GroupNorm()(x)
-            x = nn.relu(x)
+            x = self.std_convs[n](x)
+            x = self.group_norms[n](x)
+            x = F.relu(x)
 
-        x = nn.Conv(
-            features=self.num_features,
-            kernel_size=(self.patch_size // 16, self.patch_size // 16),
-            strides=(self.patch_size // 16, self.patch_size // 16),
-            padding="VALID",
-            name="embedding",
-        )(x)
+        x = self.conv(x)
         if self.use_film:
             assert cond_var is not None, "Cond var is None, nothing to condition on"
-            x = FilmConditioning()(x, cond_var)
+            x = self.film_conditioning(x, cond_var)
         return x
 
 

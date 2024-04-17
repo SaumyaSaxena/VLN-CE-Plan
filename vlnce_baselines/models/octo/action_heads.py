@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Optional, Tuple
 
 from einops import rearrange
+import torch.nn as nn
 
 from vlnce_baselines.models.octo.base import TokenGroup
 from vlnce_baselines.models.octo.diffusion import cosine_beta_schedule, create_diffusion_model
@@ -429,6 +430,7 @@ class DiffusionActionHead(nn.Module):
     action_dim: int = 7
     max_action: float = 5.0
     loss_type: str = "mse"
+    embedding_size: int = 384
 
     # diffusion-specific config with sane defaults
     time_dim: int = 32
@@ -450,6 +452,7 @@ class DiffusionActionHead(nn.Module):
             dropout_rate=self.dropout_rate,
             hidden_dim=self.hidden_dim,
             use_layer_norm=self.use_layer_norm,
+            embedding_size=self.embedding_size
         )
 
         # create beta schedule

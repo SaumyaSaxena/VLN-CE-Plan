@@ -90,7 +90,7 @@ class MAPHead(nn.Module):
     ):
         super().__init__()
         self.num_readouts = num_readouts
-        self.probe = nn.Embedding(1, num_readouts, dim)
+        self.probe = nn.Embedding(1, num_readouts, dim) # TODO(saumya)
         self.multihead_attention = nn.MultiheadAttention(
             embed_dim=mlp_dim,
             num_heads=num_heads

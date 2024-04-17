@@ -77,27 +77,45 @@ class OctoTransformer(nn.Module):
         transformer_kwargs: Dict,
         token_embedding_size: int,
         max_horizon: int,
+        max_tokens: int,
     ):
         super().__init__()
-        self.task_tokenizers = task_tokenizers
-        self.readouts = readouts
 
-        self.dense_layer1 = nn.Linear(
-            in_features=dim,
-            out_features=token_embedding_size
-        )
+        self.task_dense_layers = []
+        self.task_pos_emb = []
+        for _, tok in task_tokenizers.items():
+            self.task_dense_layers.append(
+                nn.Linear(
+                    in_features=tok.hidden_dim,
+                    out_features=token_embedding_size
+                )
+            )
+            self.task_pos_emb.append(nn.Embedding(1, max_tokens, token_embedding_size))
+
+        self.observation_dense_layers = []
+        self.observation_pos_emb = []
+        for _, tok in observation_tokenizers.items():
+            self.observation_dense_layers.append(
+                nn.Linear(
+                    in_features=tok.encoder_def.num_features, 
+                    out_features=token_embedding_size
+                )
+            )
+            self.observation_pos_emb.append(nn.Embedding(1, max_horizon, tok.num_tokens, token_embedding_size)) # TODO(saumya): tok.num_tokens is only correct only for image size 256*256
+
+        self.readout_pos_emb = []
+        for _, n_tokens in readouts.items():
+            self.readout_pos_emb.append(nn.Embedding(1, max_horizon, n_tokens, token_embedding_size))
+
         self.block_transformer = BlockTransformer(transformer_kwargs)
+        # self.reset_parameters()
 
-        self.embedding1 = nn.Embedding(1, window_size, dim)
-        self.embedding2 = nn.Embedding(1, window_size, dim)
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        nn.init.normal_(self.embedding1.weight)
-        nn.init.normal_(self.embedding1.weight)
+    # def reset_parameters(self):
+    #     nn.init.normal_(self.embedding1.weight)
+    #     nn.init.normal_(self.embedding1.weight)
     
 
-    def __call__(
+    def forward(
         self,
         observations: Dict,
         tasks: Dict,
@@ -167,7 +185,7 @@ class OctoTransformer(nn.Module):
         #
         # First, add the task tokens
         #
-
+        i=0
         for name, tok in self.task_tokenizers.items():
             group_name = f"task_{name}"
             # Receive inputs from tokenizer and cast to embedding size
@@ -176,11 +194,12 @@ class OctoTransformer(nn.Module):
                 logging.warning(f"Skipping task tokenizer: {group_name}")
                 continue
 
-            task_tokens = self.dense_layer1(tokenizer_output.tokens)
+            task_tokens = self.task_dense_layers[i](tokenizer_output.tokens)
             # task_tokens shape is (batch, n_tokens, token_embedding_size)
 
             # Add positional embedding
-            task_tokens += self._create_positional_embedding(group_name, task_tokens)
+            embedding = self.task_pos_emb[i](task_tokens)
+            task_tokens += torch.broadcast_to(embedding, task_tokens.shape)
 
             all_prefix_groups.append(
                 PrefixGroup(
@@ -190,11 +209,12 @@ class OctoTransformer(nn.Module):
                     attention_rules=task_attention_rules,
                 )
             )
+            i += 1
 
         #
         # Next, add the observation tokens
         #
-
+        i=0
         for name, tok in self.observation_tokenizers.items():
             group_name = f"obs_{name}"
             # Receive inputs from tokenizer and cast to embedding size
@@ -203,13 +223,14 @@ class OctoTransformer(nn.Module):
                 logging.warning(f"Skipping observation tokenizer: {group_name}")
                 continue
 
-            obs_tokens = nn.Dense(
-                self.token_embedding_size, name=f"{group_name}_projection"
-            )(tokenizer_output.tokens)
+            obs_tokens = self.observation_dense_layers[i](tokenizer_output.tokens)
             # obs_tokens shape is (batch, horizon, n_tokens, token_embedding_size)
 
             # Add positional embedding
-            obs_tokens += self._create_positional_embedding(group_name, obs_tokens)
+            embedding = self.observation_pos_emb[i](obs_tokens)
+            # Use only the timesteps we receive as input
+            embedding = embedding[:, : obs_tokens.shape[1]]
+            obs_tokens += torch.broadcast_to(embedding, obs_tokens.shape)
 
             # Update mask to account for which timesteps are padding
             obs_pad_mask = torch.logical_and(pad_mask[:, :, None], tokenizer_output.mask)
@@ -222,6 +243,7 @@ class OctoTransformer(nn.Module):
                     attention_rules=observation_attention_rules,
                 )
             )
+            i += 1
         #
         # Finally, add the readout tokens
         #
@@ -235,9 +257,12 @@ class OctoTransformer(nn.Module):
             ) # TODO(saumya): device?
 
             # Add positional embedding
-            readout_tokens += self._create_positional_embedding(
-                group_name, readout_tokens
-            )
+            embedding = self.readout_pos_emb[i](readout_tokens)
+            # Use only the timesteps we receive as input
+            embedding = embedding[:, : readout_tokens.shape[1]]
+            readout_tokens += torch.broadcast_to(embedding, readout_tokens.shape)
+
+
             readout_mask = torch.ones((batch_size, horizon, n_tokens_for_readout)) # TODO(saumya): device?
             readout_attention_rules = {
                 "task_*": AttentionRule.CAUSAL,
@@ -356,6 +381,7 @@ class OctoModule(nn.Module):
         readouts: Dict[str, int],
         transformer_kwargs: Dict,
         token_embedding_size: int,
+        max_tokens: int,
         max_horizon: int,
     ) -> "OctoModule":
         """
@@ -392,6 +418,7 @@ class OctoModule(nn.Module):
             readouts=readouts,
             token_embedding_size=token_embedding_size,
             max_horizon=max_horizon,
+            max_tokens=max_tokens,
             transformer_kwargs=transformer_kwargs,
         )
 
