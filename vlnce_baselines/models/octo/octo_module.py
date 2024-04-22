@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Optional, Sequence
 
 import torch
-from torch.nn import nn
+import torch.nn as nn
 
 from vlnce_baselines.models.octo.base import TokenGroup
 from vlnce_baselines.models.octo.block_transformer import (
@@ -80,6 +80,13 @@ class OctoTransformer(nn.Module):
         max_tokens: int,
     ):
         super().__init__()
+        self.observation_tokenizers = observation_tokenizers
+        self.task_tokenizers = task_tokenizers
+        self.readouts = readouts
+        self.transformer_kwargs = transformer_kwargs
+        self.token_embedding_size = token_embedding_size
+        self.max_horizon = max_horizon
+        self.max_tokens = max_tokens
 
         self.task_dense_layers = []
         self.task_pos_emb = []
@@ -90,7 +97,7 @@ class OctoTransformer(nn.Module):
                     out_features=token_embedding_size
                 )
             )
-            self.task_pos_emb.append(nn.Embedding(1, max_tokens, token_embedding_size))
+            self.task_pos_emb.append(nn.Embedding(max_tokens, token_embedding_size))
 
         self.observation_dense_layers = []
         self.observation_pos_emb = []
@@ -101,11 +108,11 @@ class OctoTransformer(nn.Module):
                     out_features=token_embedding_size
                 )
             )
-            self.observation_pos_emb.append(nn.Embedding(1, max_horizon, tok.num_tokens, token_embedding_size)) # TODO(saumya): tok.num_tokens is only correct only for image size 256*256
+            self.observation_pos_emb.append(nn.Embedding(max_horizon*tok.num_tokens, token_embedding_size)) # TODO(saumya): tok.num_tokens is only correct only for image size 256*256
 
         self.readout_pos_emb = []
-        for _, n_tokens in readouts.items():
-            self.readout_pos_emb.append(nn.Embedding(1, max_horizon, n_tokens, token_embedding_size))
+        for _, n_tokens in self.readouts.items():
+            self.readout_pos_emb.append(nn.Embedding(max_horizon*n_tokens, token_embedding_size))
 
         self.block_transformer = BlockTransformer(transformer_kwargs)
         # self.reset_parameters()
@@ -185,8 +192,7 @@ class OctoTransformer(nn.Module):
         #
         # First, add the task tokens
         #
-        i=0
-        for name, tok in self.task_tokenizers.items():
+        for i, (name, tok) in enumerate(self.task_tokenizers.items()):
             group_name = f"task_{name}"
             # Receive inputs from tokenizer and cast to embedding size
             tokenizer_output: TokenGroup = tok(observations, tasks, train=train)
@@ -198,7 +204,7 @@ class OctoTransformer(nn.Module):
             # task_tokens shape is (batch, n_tokens, token_embedding_size)
 
             # Add positional embedding
-            embedding = self.task_pos_emb[i](task_tokens)
+            embedding = self.task_pos_emb[i](torch.arange(self.max_tokens)) #TODO(saumya): device?
             task_tokens += torch.broadcast_to(embedding, task_tokens.shape)
 
             all_prefix_groups.append(
@@ -209,13 +215,11 @@ class OctoTransformer(nn.Module):
                     attention_rules=task_attention_rules,
                 )
             )
-            i += 1
 
         #
         # Next, add the observation tokens
         #
-        i=0
-        for name, tok in self.observation_tokenizers.items():
+        for i , (name, tok) in enumerate(self.observation_tokenizers.items()):
             group_name = f"obs_{name}"
             # Receive inputs from tokenizer and cast to embedding size
             tokenizer_output: TokenGroup = tok(observations, tasks, train=train)
@@ -227,9 +231,8 @@ class OctoTransformer(nn.Module):
             # obs_tokens shape is (batch, horizon, n_tokens, token_embedding_size)
 
             # Add positional embedding
-            embedding = self.observation_pos_emb[i](obs_tokens)
-            # Use only the timesteps we receive as input
-            embedding = embedding[:, : obs_tokens.shape[1]]
+            embedding = self.observation_pos_emb[i](torch.arange(tok.num_tokens*horizon)) # Use only the timesteps we receive as input
+            embedding = embedding.reshape(1, *obs_tokens.shape[1:])
             obs_tokens += torch.broadcast_to(embedding, obs_tokens.shape)
 
             # Update mask to account for which timesteps are padding
@@ -243,25 +246,21 @@ class OctoTransformer(nn.Module):
                     attention_rules=observation_attention_rules,
                 )
             )
-            i += 1
         #
         # Finally, add the readout tokens
         #
 
-        for readout_name in readouts:
+        for i, readout_name in enumerate(readouts):
             group_name = f"readout_{readout_name}"
             # Readouts do not correspond to any inputs, just positional embeddings
             n_tokens_for_readout = self.readouts[readout_name]
             readout_tokens = torch.zeros(
                 (batch_size, horizon, n_tokens_for_readout, self.token_embedding_size)
             ) # TODO(saumya): device?
-
             # Add positional embedding
-            embedding = self.readout_pos_emb[i](readout_tokens)
-            # Use only the timesteps we receive as input
-            embedding = embedding[:, : readout_tokens.shape[1]]
+            embedding = self.readout_pos_emb[i](torch.arange(n_tokens_for_readout*horizon)) # Use only the timesteps we receive as input
+            embedding = embedding.reshape(1, horizon, n_tokens_for_readout, self.token_embedding_size)
             readout_tokens += torch.broadcast_to(embedding, readout_tokens.shape)
-
 
             readout_mask = torch.ones((batch_size, horizon, n_tokens_for_readout)) # TODO(saumya): device?
             readout_attention_rules = {
@@ -344,11 +343,16 @@ class OctoModule(nn.Module):
     """
     Bundles OctoTransformer with various heads (useful for keeping all parameters in one place).
     """
+    def __init__(
+        self,
+        octo_transformer: OctoTransformer,
+        heads: Dict[str, nn.Module]
+    ):
+        super().__init__()
+        self.octo_transformer = octo_transformer
+        self.heads = heads
 
-    octo_transformer: OctoTransformer
-    heads: Dict[str, nn.Module]
-
-    def __call__(self, observations, tasks, pad_mask, train=True, verbose=False):
+    def forward(self, observations, tasks, pad_mask, train=True, verbose=False):
         """Run transformer and the main method for all heads. Useful for init.
 
         Args:

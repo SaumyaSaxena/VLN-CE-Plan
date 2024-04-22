@@ -2,7 +2,8 @@
 from typing import Callable, Optional, Union, Any
 
 import torch
-from torch.nn import nn
+import torch.nn as nn
+import torch.nn.functional as F
 
 from vlnce_baselines.models.octo.base import TokenGroup
 
@@ -11,7 +12,7 @@ class AddPositionEmbs(nn.Module):
 
     def __init__(self, window_size, dim):
         super().__init__()
-        self.embed = nn.Embedding(1, window_size, dim)
+        self.embed = nn.Embedding(window_size, dim)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -37,16 +38,14 @@ class MlpBlock(nn.Module):
     """Transformer MLP / feed-forward block."""
     def __init__(self,
         mlp_dim: int,
-        out_dim: Optional[int] = None,
+        out_dim: int,
         dropout_rate: float = 0.1,
     ):
         super().__init__()
-        if out_dim == None:
-            out_dim = mlp_dim
 
         self.dense_layer1 = nn.Linear(
-            in_features=mlp_dim,
-            out_features=out_dim
+            in_features=out_dim,
+            out_features=mlp_dim
         )
         self.dropout1 = nn.Dropout(dropout_rate)
 
@@ -67,13 +66,11 @@ class MlpBlock(nn.Module):
 
     def forward(self, inputs):
         """Applies Transformer MlpBlock module."""
-        actual_out_dim = inputs.shape[-1] if self.out_dim is None else self.out_dim
         x = self.dense_layer1(inputs)
-        x = nn.gelu(x)
+        x = F.gelu(x)
         x = self.dropout1(x)
         
         output = self.dense_layer2(x)
-
         output = self.dropout2(output)
         return output
 
@@ -144,24 +141,27 @@ class Encoder1DBlock(nn.Module):
       num_heads: Number of heads in nn.MultiHeadDotProductAttention
     """
     def __init__(self,
+        token_embedding_size: int,
         mlp_dim: int,
         num_heads: int,
         dropout_rate: float = 0.1,
         attention_dropout_rate: float = 0.1,
     ):
         super().__init__()
+        self.mlp_dim = mlp_dim
 
-        self.layer_norm1 = nn.LayerNorm(mlp_dim)
+        self.layer_norm1 = nn.LayerNorm(token_embedding_size)
         self.multihead_attention = nn.MultiheadAttention(
-            embed_dim=mlp_dim,
+            embed_dim=token_embedding_size,
             num_heads=num_heads,
-            dropout=attention_dropout_rate
+            dropout=attention_dropout_rate,
+            batch_first=True
         )
 
         self.dropout = nn.Dropout(dropout_rate)
 
-        self.layer_norm2 = nn.LayerNorm(mlp_dim)
-        self.mlp_block = MlpBlock(mlp_dim=mlp_dim, dropout_rate=dropout_rate)
+        self.layer_norm2 = nn.LayerNorm(token_embedding_size)
+        self.mlp_block = MlpBlock(mlp_dim=mlp_dim, out_dim=token_embedding_size, dropout_rate=dropout_rate)
         
 
     def forward(self, inputs, attention_mask):
@@ -177,8 +177,8 @@ class Encoder1DBlock(nn.Module):
 
         # Attention block.
         assert inputs.ndim == 3, f"Expected (batch, seq, hidden) got {inputs.shape}"
-        x = self.layer_norm(inputs)
-        x = self.multihead_attention(x, x, x, attn_mask=attention_mask)
+        x = self.layer_norm1(inputs)
+        x, attn_weights = self.multihead_attention(x, x, x, attn_mask=attention_mask)
         x = self.dropout(x)
         x = x + inputs
 
@@ -208,18 +208,20 @@ class Transformer(nn.Module):
         attention_dropout_rate: float = 0.1,
         add_position_embedding: bool = False,
         window_size: int = 2,
+        token_embedding_size: int = 384,
     ):
         super().__init__()
         self.num_layers = num_layers
         self.add_position_embedding = add_position_embedding
 
-        self.position_emb = AddPositionEmbs(window_size=window_size, dim=self.mlp_dim)
-        self.pos_emb_dropout = nn.Dropout(self.dropout_rate)
+        self.position_emb = AddPositionEmbs(window_size=window_size, dim=mlp_dim)
+        self.pos_emb_dropout = nn.Dropout(dropout_rate)
 
         self.encoder_blocks = []
         for _ in range(self.num_layers):
             self.encoder_blocks.append(
                 Encoder1DBlock(
+                    token_embedding_size=token_embedding_size,
                     mlp_dim=mlp_dim,
                     dropout_rate=dropout_rate,
                     attention_dropout_rate=attention_dropout_rate,
@@ -227,8 +229,7 @@ class Transformer(nn.Module):
                 )
             )
         
-        self.layer_norm = nn.LayerNorm(mlp_dim) #TODO(saumya): check
-    
+        self.layer_norm = nn.LayerNorm(token_embedding_size)
 
     def forward(self, x, attention_mask, *, train):
         """Applies Transformer model on the inputs.
@@ -241,7 +242,6 @@ class Transformer(nn.Module):
           output of a transformer encoder.
         """
         assert x.ndim == 3  # (batch, len, emb)
-
         if self.add_position_embedding:
             x = self.position_emb(x)
             x = self.pos_emb_dropout(x)

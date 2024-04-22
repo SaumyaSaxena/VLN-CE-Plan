@@ -4,6 +4,7 @@ from fnmatch import fnmatch
 import logging
 from typing import Any, Dict, Mapping, Sequence, Tuple, Union
 
+import numpy as np
 import torch
 import einops
 from torch import nn
@@ -33,9 +34,15 @@ class PrefixGroup(TokenGroup):
     attention_rules (Dict[str, AttentionRule]): A dictionary of {pattern: AttentionRule} where the attention rule
         is recovered by fnmatch-ing the name of the other group until a match is found (or the end).
     """
-
-    name: str
-    attention_rules: Mapping[str, AttentionRule]
+    def __init__(self,
+        name: str,
+        attention_rules: Mapping[str, AttentionRule],
+        tokens: torch.Tensor,
+        mask: torch.Tensor,
+    ):
+        super().__init__(tokens, mask)
+        self.name = name
+        self.attention_rules = attention_rules
 
     def __post_init__(self):
         assert (
@@ -50,8 +57,15 @@ class TimestepGroup(TokenGroup):
     See PrefixGroup for details on the name and attention_rules fields.
     """
 
-    name: str
-    attention_rules: Mapping[str, AttentionRule]
+    def __init__(self,
+        name: str,
+        attention_rules: Mapping[str, AttentionRule],
+        tokens: torch.Tensor,
+        mask: torch.Tensor,
+    ):
+        super().__init__(tokens, mask)
+        self.name = name
+        self.attention_rules = attention_rules
 
     def __post_init__(self):
         assert (
@@ -76,9 +90,16 @@ class TokenMetadata:
     attention_rules[self.name] = AttentionRule.NEVER
     """
 
-    name: str
-    timestep: int  # -1 for prefix tokens
-    attention_rules: Mapping[str, AttentionRule]
+    
+
+    def __init__(self,
+        name: str,
+        timestep: int,  # -1 for prefix tokens
+        attention_rules: Mapping[str, AttentionRule],
+    ):
+        self.name = name
+        self.timestep = timestep
+        self.attention_rules = attention_rules
 
     @classmethod
     def create(cls, group: Union[PrefixGroup, TimestepGroup], timestep: int):
@@ -108,8 +129,7 @@ class TokenMetadata:
 
 
 def split_tokens(ary: torch.Tensor, n_tokens_per_group: Sequence[int], axis: int):
-    cumsum = torch.cumsum(n_tokens_per_group)
-    return torch.split(ary, cumsum, axis=axis)
+    return torch.split(ary, n_tokens_per_group, dim=axis)
 
 
 class BlockTransformer(nn.Module):
@@ -119,6 +139,7 @@ class BlockTransformer(nn.Module):
         super().__init__()
         # Enforce that timestep causal structure is not broken (future timesteps can't attend to past timesteps)
         self.enforce_causal = enforce_causal
+        self.num_attention_heads = transformer_kwargs['num_attention_heads']
         self.transformer = Transformer(**transformer_kwargs)
 
     def forward(
@@ -160,20 +181,18 @@ class BlockTransformer(nn.Module):
 
         # Assemble input tokens (batch, total_tokens, token_embedding_size)
         input_tokens = self.assemble_input_tokens(prefix_groups, timestep_groups)
-
         # Creates correct attention mask for transformer using group attention rules and masks
-        # Shape: (batch, 1, total_tokens, total_tokens)
-        attention_mask = self.generate_attention_mask(prefix_groups, timestep_groups)
+        # Shape: (batch*num_heads, total_tokens, total_tokens)
+        attention_mask = self.generate_attention_mask(prefix_groups, timestep_groups, self.num_attention_heads)
 
         # Sows attention mask for ease of retrieval when debugging
         # https://flax.readthedocs.io/en/latest/api_reference/flax.linen/module.html#flax.linen.Module.sow
-        self.sow("intermediates", "attention_mask", attention_mask)
+        # self.sow("intermediates", "attention_mask", attention_mask)
 
         # Run transformer
         output = self.transformer(
             input_tokens, attention_mask, train=train
         )
-
         # Split output into prefix and timestep groups
         all_prefix_outputs, all_timestep_outputs = self.split_output_tokens(
             output, prefix_groups, timestep_groups
@@ -228,9 +247,9 @@ class BlockTransformer(nn.Module):
         horizon = timestep_groups[0].tokens.shape[1]
         tokens_per_prefix_group = [group.tokens.shape[1] for group in prefix_groups]
         n_prefix_tokens = sum(tokens_per_prefix_group)
-
+        n_other_tokens = output_tokens.shape[1] - n_prefix_tokens
         prefix_embeddings, timestep_embeddings = torch.split(
-            output_tokens, [n_prefix_tokens], axis=1
+            output_tokens, [n_prefix_tokens, n_other_tokens], dim=1
         )
 
         # Process prefix group outputs
@@ -238,10 +257,14 @@ class BlockTransformer(nn.Module):
             prefix_embeddings_split = split_tokens(
                 prefix_embeddings, tokens_per_prefix_group, axis=1
             )
-            all_prefix_outputs = [
-                group.replace(tokens=embeddings)
-                for group, embeddings in zip(prefix_groups, prefix_embeddings_split)
-            ]
+            # all_prefix_outputs = [
+            #     group.replace(tokens=embeddings)
+            #     for group, embeddings in zip(prefix_groups, prefix_embeddings_split)
+            # ]
+            all_prefix_outputs = []
+            for group, embeddings in zip(prefix_groups, prefix_embeddings_split):
+                group.tokens = embeddings
+                all_prefix_outputs.append(group)
         else:
             all_prefix_outputs = []
 
@@ -257,16 +280,22 @@ class BlockTransformer(nn.Module):
             timestep_embeddings, tokens_per_timestep_group, axis=2
         )
 
-        all_timestep_outputs = [
-            group.replace(tokens=embeddings)
-            for group, embeddings in zip(timestep_groups, timestep_embeddings_split)
-        ]
+        # all_timestep_outputs = [
+        #     group.replace(tokens=embeddings)
+        #     for group, embeddings in zip(timestep_groups, timestep_embeddings_split)
+        # ]
+        all_timestep_outputs = []
+        for group, embeddings in zip(timestep_groups, timestep_embeddings_split):
+            group.tokens = embeddings
+            all_timestep_outputs.append(group)
+
         return all_prefix_outputs, all_timestep_outputs
 
     def generate_attention_mask(
         self,
         prefix_groups: Sequence[PrefixGroup],
         timestep_groups: Sequence[TimestepGroup],
+        num_heads: int,
     ):
         """
         Args:
@@ -284,7 +313,7 @@ class BlockTransformer(nn.Module):
             self.verify_causality(prefix_groups, timestep_groups)
 
         def _get_position(i, tokens_per_elem):
-            return torch.searchsorted(torch.cumsum(tokens_per_elem), i)
+            return torch.searchsorted(torch.cumsum(torch.Tensor(tokens_per_elem),dim=0), i)
 
         horizon = timestep_groups[0].tokens.shape[1]
         tokens_per_prefix_group = [group.tokens.shape[1] for group in prefix_groups]
@@ -314,15 +343,18 @@ class BlockTransformer(nn.Module):
                 attention_mask[i, j] = mask
 
         pad_attention_mask = self.generate_pad_attention_mask(
-            prefix_groups, timestep_groups
+            prefix_groups, timestep_groups, num_heads
         )
         attention_mask = torch.logical_and(attention_mask, pad_attention_mask)
-        return attention_mask
+        attention_mask = attention_mask.repeat(1,num_heads,1,1)
+        attention_mask = attention_mask.reshape(-1,attention_mask.shape[2],attention_mask.shape[3])
+        return attention_mask.to(dtype=torch.float32)
 
     def generate_pad_attention_mask(
         self,
         prefix_groups: Sequence[PrefixGroup],
         timestep_groups: Sequence[TimestepGroup],
+        num_heads: int
     ):
         """
         Generate a nn.MultiHeadDotProductAttention mask that ignores padding by masks from all timestep groups,
@@ -354,6 +386,7 @@ class BlockTransformer(nn.Module):
                 pad_mask.shape[1],
             ),
         )
+
         return pad_mask
 
     def verify_causality(

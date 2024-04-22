@@ -1,3 +1,6 @@
+import sys, os
+sys.path.append('/home/saumyas/Projects/VLN-CE-Plan')
+
 import abc
 import torch
 from torch import nn
@@ -12,13 +15,24 @@ from vlnce_baselines.models.octo.spec import ModuleSpec
 
 # @baseline_registry.register_policy
 class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
-    module: OctoModule
-    seed: int
-    text_processor: TextProcessor
-    config: Dict
-    example_batch: Dict
-    dataset_statistics: Dict
 
+    def __init__(
+        self,
+        module: OctoModule,
+        seed: int,
+        text_processor: TextProcessor,
+        config: Dict,
+        example_batch: Dict,
+        dataset_statistics: Dict,
+    ):
+        super().__init__()
+        self.module = module
+        self.seed = seed
+        self.text_processor = text_processor
+        self.config = config
+        self.example_batch = example_batch
+        self.dataset_statistics = dataset_statistics
+    
     @classmethod
     def from_config(
         cls,
@@ -53,7 +67,7 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         self,
         observations,
         tasks,
-        pad_mask,
+        pad_mask = None,
         train: bool = False,
         argmax: bool = False,
         sample_shape: Tuple[int, ...] = (),
@@ -72,8 +86,7 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         """
         if pad_mask is None:
             pad_mask = observations["pad_mask"]
-
-        transformer_outputs = self.run_transformer(
+        transformer_outputs, _ = self.run_transformer(
             observations, tasks, pad_mask, train=train
         )
         return self.module.heads["action"].predict_action(
@@ -84,7 +97,7 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
             temperature=temperature,
         )
 
-    def create_tasks(self, goals, texts):
+    def create_tasks(self, goals=None, texts=None):
         """Creates tasks dict from goals and texts.
 
         Args:
@@ -99,20 +112,20 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         if goals is not None:
             tasks.update(goals)
             tasks["pad_mask_dict"].update(
-                {k: np.ones(v.shape[:1], dtype=bool) for k, v in goals.items()}
+                {k: torch.ones(v.shape[:1], dtype=bool) for k, v in goals.items()}
             )
         else:
             batch_size = len(texts)
             tasks.update(
                 {
-                    k: np.zeros((batch_size, *v.shape[1:]), dtype=v.dtype)
+                    k: torch.from_numpy(np.zeros((batch_size, *v.shape[1:]), dtype=v.dtype))
                     for k, v in self.example_batch["task"].items()
                     if k not in ("pad_mask_dict", "language_instruction")
                 }
             )
             tasks["pad_mask_dict"].update(
                 {
-                    k: np.zeros(batch_size, dtype=bool)
+                    k: torch.zeros(batch_size, dtype=bool)
                     for k in tasks.keys()
                     if k != "pad_mask_dict"
                 }
@@ -121,13 +134,13 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         if texts is not None:
             assert self.text_processor is not None
             tasks["language_instruction"] = texts
-            tasks["pad_mask_dict"]["language_instruction"] = np.ones(
+            tasks["pad_mask_dict"]["language_instruction"] = torch.ones(
                 len(texts), dtype=bool
             )
         else:
             batch_size = jax.tree_leaves(goals)[0].shape[0]
             tasks["language_instruction"] = [""] * batch_size
-            tasks["pad_mask_dict"]["language_instruction"] = np.zeros(
+            tasks["pad_mask_dict"]["language_instruction"] = torch.zeros(
                 batch_size, dtype=bool
             )
 
@@ -141,6 +154,33 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         # _verify_shapes(tasks, "tasks", self.example_batch["task"], starting_dim=1)
         return tasks
     
+    def run_transformer(
+        self, observations, tasks, pad_mask, train: bool = False
+    ):
+        """Runs the transformer, but does shape checking on the inputs.
+
+        Args:
+            observations: dictionary of arrays of shape (batch_size, window_size, *shape).
+                Shape must be consistent with self.example_batch["observation"]
+            tasks: dict of tasks of shape (batch_size, *shape)
+                Shape must be consistent with self.example_batch["task"]
+            pad_mask: (batch_size, window_size) Boolean mask that is False when the timestep corresponds to padding
+            train: whether to run in train mode
+        """
+        # _verify_shapes(
+        #     observations,
+        #     "observations",
+        #     self.example_batch["observation"],
+        #     starting_dim=2,
+        # )
+        # _verify_shapes(tasks, "tasks", self.example_batch["task"], starting_dim=1)
+
+        return self.module(
+            observations,
+            tasks,
+            pad_mask,
+            train=train,
+        )
 
     def loss_fn(self, params, batch, rng, train=True):
         bound_module = self.module.bind({"params": params}, rngs={"dropout": rng})

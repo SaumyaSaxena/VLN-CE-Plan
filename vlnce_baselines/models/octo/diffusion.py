@@ -4,7 +4,7 @@ from typing import Callable, Optional, Sequence
 import torch
 import torch.nn as nn
 
-default_init = nn.initializers.xavier_uniform
+default_init = nn.init.xavier_uniform_
 
 
 def cosine_beta_schedule(timesteps, s=0.008):
@@ -21,11 +21,17 @@ def cosine_beta_schedule(timesteps, s=0.008):
 
 
 class ScoreActor(nn.Module):
-    time_preprocess: nn.Module
-    cond_encoder: nn.Module
-    reverse_network: nn.Module
+    def __init__(self,
+        time_preprocess: nn.Module,
+        cond_encoder: nn.Module,
+        reverse_network: nn.Module,
+    ):
+        super().__init__()
+        self.time_preprocess = time_preprocess
+        self.cond_encoder = cond_encoder
+        self.reverse_network = reverse_network
 
-    def __call__(self, obs_enc, actions, time, train=False):
+    def forward(self, obs_enc, actions, time, train=False):
         t_ff = self.time_preprocess(time)
         cond_enc = self.cond_encoder(t_ff, train=train)
         reverse_input = torch.concatenate([cond_enc, obs_enc, actions], axis=-1)
@@ -46,7 +52,7 @@ class FourierFeatures(nn.Module):
 
     def forward(self, x: torch.Tensor):
         if self.learnable:
-            f = 2 * torch.pi * x @ self.w.T
+            f = 2 * torch.pi * x @ (self.w.weight).T
         else:
             half_dim = self.output_size // 2
             f = torch.log(10000) / (half_dim - 1)
@@ -59,7 +65,7 @@ class MLP(nn.Module):
     def __init__(self,
         input_dim: int,
         hidden_dims: Sequence[int],
-        activation: Callable = nn.silu,
+        activation: Callable = nn.SiLU(),
         activate_final: bool = False,
         use_layer_norm: bool = False,
         dropout_rate: Optional[float] = None,
@@ -92,6 +98,7 @@ class MLP(nn.Module):
 
 
     def forward(self, x: torch.Tensor, train: bool = False) -> torch.Tensor:
+        
         for i, size in enumerate(self.hidden_dims):
             x = self.dense_layers[i](x)
 
@@ -156,10 +163,11 @@ class MLPResNet(nn.Module):
         dropout_rate: float = None,
         use_layer_norm: bool = False,
         hidden_dim: int = 256,
-        activation: Callable = nn.silu,
+        activation: Callable = nn.SiLU(),
     ):  
         super().__init__()
         self.num_blocks = num_blocks
+        self.activation = activation
 
         self.dense_layer1 = nn.Linear(
             in_features=inp_dim,

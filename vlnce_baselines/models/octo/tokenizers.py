@@ -5,7 +5,6 @@ from typing import Dict, Optional, Sequence
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions.normal.Normal import icdf
 
 from vlnce_baselines.models.octo.base import TokenGroup
 from vlnce_baselines.models.octo.transformer import MAPHead
@@ -148,7 +147,7 @@ class ImageTokenizer(nn.Module):
                     f"No task inputs matching {self.task_stack_keys} were found."
                 )
             task_inputs = extract_inputs(task_stack_keys, tasks, check_spatial=True)
-            task_inputs = task_inputs[:, None].repeat(enc_inputs.shape[1], axis=1)
+            task_inputs = torch.stack([task_inputs]*enc_inputs.shape[1], dim=1)
             enc_inputs = torch.concatenate([enc_inputs, task_inputs], axis=-1)
         b, t, h, w, c = enc_inputs.shape
         enc_inputs = torch.reshape(enc_inputs, (b * t, h, w, c))
@@ -163,7 +162,8 @@ class ImageTokenizer(nn.Module):
             )
 
         # run visual encoder
-        image_tokens = self.encoder_def(enc_inputs, **encoder_input_kwargs)
+        image_tokens = self.encoder_def(enc_inputs.permute(0,3,1,2), **encoder_input_kwargs) # TODO(saumya): permute to change to (b,c,h,w) format. Check!
+        image_tokens = image_tokens.permute(0,2,3,1) # TODO(saumya): permute to change back to (b,h,w,c) format. Check!
         image_tokens = torch.reshape(image_tokens, (b, t, -1, image_tokens.shape[-1]))
 
         if self.use_token_learner:
@@ -196,18 +196,27 @@ class LanguageTokenizer(nn.Module):
     finetune_encoder: bool = False
     proper_pad_mask: bool = True
 
-    def setup(self):
-        if self.encoder is not None:
-            from transformers import AutoConfig, FlaxAutoModel, FlaxT5EncoderModel
+    def __init__(self,
+        encoder: str = None,
+        finetune_encoder: bool = False,
+        proper_pad_mask: bool = True,
+    ):
+        super().__init__()
+        self.encoder = encoder
+        self.finetune_encoder = finetune_encoder
+        self.proper_pad_mask = proper_pad_mask
+
+        if encoder is not None:
+            from transformers import AutoConfig, AutoModelForSeq2SeqLM, T5ForConditionalGeneration
 
             config = AutoConfig.from_pretrained(self.encoder)
             self.hidden_dim = config.d_model
             if "t5" in self.encoder:
-                self.hf_model = FlaxT5EncoderModel(config).module
+                self.hf_model = T5ForConditionalGeneration.from_pretrained(self.encoder)
             else:
-                self.hf_model = FlaxAutoModel.from_config(config).module
+                self.hf_model = AutoModelForSeq2SeqLM.from_pretrained(self.encoder)
 
-    def __call__(
+    def forward(
         self,
         observations,
         tasks=None,
@@ -217,22 +226,28 @@ class LanguageTokenizer(nn.Module):
             logging.warning("No language inputs found. Skipping tokenizer entirely.")
             assert self.proper_pad_mask, "Cannot skip unless using proper pad mask."
             return None
-
         if not isinstance(tasks["language_instruction"], torch.Tensor):
             assert (
                 self.encoder is not None
             ), "Received language tokens but no encoder specified."
-            tokens = self.hf_model(**tasks["language_instruction"]).last_hidden_state
+            decoder_input_ids = torch.tensor([[0]])
+            if not self.finetune_encoder:
+                with torch.no_grad():
+                    tokens = self.hf_model(
+                        input_ids=torch.LongTensor(tasks["language_instruction"]['input_ids']),
+                        attention_mask=torch.FloatTensor(tasks["language_instruction"]['attention_mask']), 
+                        decoder_input_ids=decoder_input_ids).encoder_last_hidden_state
+            else:
+                tokens = self.hf_model(
+                        input_ids=torch.LongTensor(tasks["language_instruction"]['input_ids']),
+                        attention_mask=torch.FloatTensor(tasks["language_instruction"]['attention_mask']), 
+                        decoder_input_ids=decoder_input_ids).encoder_last_hidden_state
         else:
             # add a # tokens dimension to language
             if tasks["language_instruction"].ndim == 2:
                 tokens = tasks["language_instruction"][:, None, :]
             else:
                 tokens = tasks["language_instruction"]
-
-        if not self.finetune_encoder:
-            # tokens = jax.lax.stop_gradient(tokens)
-            tokens.requires_grad = False # TODO(saumya): check
 
         # TODO: incorporate padding info from language tokens here too
         if self.proper_pad_mask:
@@ -267,7 +282,8 @@ class BinTokenizer(nn.Module):
         if self.bin_type == "uniform":
             self.thresholds = torch.linspace(self.low, self.high, self.n_bins + 1)
         elif self.bin_type == "normal":
-            self.thresholds = icdf(torch.linspace(EPS, 1 - EPS, self.n_bins + 1)) #TODO(saumya): check
+            normal = torch.distributions.Normal(0,1)
+            self.thresholds = normal.icdf(torch.linspace(EPS, 1 - EPS, self.n_bins + 1)) #TODO(saumya): check
         else:
             raise ValueError(
                 f"Binning type {self.bin_type} not supported in BinTokenizer."

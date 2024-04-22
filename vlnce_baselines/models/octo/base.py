@@ -8,9 +8,12 @@ class TokenGroup:
         tokens: jax.Array of shape (..., n_tokens, token_dim)
         mask: jax.Array of shape (..., n_tokens) indicating which tokens are valid (1) vs padding (0)
     """
-
-    tokens: torch.Tensor
-    mask: torch.Tensor
+    def __init__(self,
+        tokens: torch.Tensor,
+        mask: torch.Tensor,
+    ):
+        self.tokens = tokens
+        self.mask = mask
 
     @classmethod
     def create(

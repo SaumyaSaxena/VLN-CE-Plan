@@ -9,6 +9,8 @@ import msgpack
 import enum 
 from typing import Dict, Any 
 
+import torch
+
 import requests
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -98,7 +100,6 @@ def load_pretrained(checkpoint_path):
     # with open('/home/saumyas/Projects/VLN-CE-Plan/tests/octo_config2.yml', 'r') as file:
     #   config = yaml.safe_load(file)
     config = OmegaConf.load('/home/saumyas/Projects/VLN-CE-Plan/vlnce_baselines/config/rxr_baselines/octo_config.yaml')
-    import ipdb; ipdb.set_trace()
     model = OctoPolicy.from_config(config, example_batch, dataset_statistics)
     
     IMAGE_URL = "https://rail.eecs.berkeley.edu/datasets/bridge_release/raw/bridge_data_v2/datacol2_toykitchen7/drawer_pnp/01/2023-04-19_09-18-15/raw/traj_group0/traj0/images0/im_12.jpg"
@@ -106,14 +107,15 @@ def load_pretrained(checkpoint_path):
     # plt.imshow(img)
 
     # create obs & task dict, run inference
-    # add batch + time horizon 1
-    img = img[np.newaxis,np.newaxis,...]
-    observation = {"image_primary": img, "pad_mask": np.array([[True]])}
+    # add batch + time horizon 2
+    img = img[np.newaxis,...]
+    img = np.stack([img]*2, axis=1) # horizon=2
+    observation = {"image_primary": torch.Tensor(img), "pad_mask": torch.Tensor([[True, True]])}
     task = model.create_tasks(texts=["pick up the fork"])
+    
     action = model.sample_actions(observation, task)
-    import ipdb; ipdb.set_trace()
+    return action
 
 if __name__ == "__main__":
-    load_pretrained("hf://rail-berkeley/octo-small")
-
+    action = load_pretrained("hf://rail-berkeley/octo-small")
     import ipdb; ipdb.set_trace()

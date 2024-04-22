@@ -87,8 +87,10 @@ def _infer_full_name(o: object):
 
 
 def _import_from_string(module_string: str, name: str):
-    try:
-        module = importlib.import_module(module_string)
-        return getattr(module, name)
-    except Exception as e:
-        raise ValueError(f"Could not import {module_string}:{name}") from e
+    module = importlib.import_module(module_string)
+    return getattr(module, name)
+    # try:
+    #     module = importlib.import_module(module_string)
+    #     return getattr(module, name)
+    # except Exception as e:
+    #     raise ValueError(f"Could not import {module_string}:{name}") from e

@@ -13,7 +13,6 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-
 from vlnce_baselines.models.octo.film_conditioning_layer import FilmConditioning
 
 T = TypeVar("T")
@@ -22,10 +21,10 @@ T = TypeVar("T")
 def normalize_images(img, img_norm_type="default"):
     if img_norm_type == "default":
         # put pixels in [-1, 1]
-        return img.astype(torch.float32) / 127.5 - 1.0
+        return img.to(torch.float32) / 127.5 - 1.0
     elif img_norm_type == "imagenet":
         # put pixels in [0,1]
-        img = img.astype(torch.float32) / 255
+        img = img.to(torch.float32) / 255
         assert img.shape[-1] % 3 == 0, "images should have rgb channels!"
 
         # define pixel-wise mean/std stats calculated from ImageNet
@@ -127,6 +126,7 @@ class SmallStem(nn.Module):
         padding: tuple = (1, 1, 1, 1),
         num_features: int = 512,
         img_norm_type: str = "default",
+        num_inp_channels: int = 3,
     ):
         super().__init__()
         self.use_film = use_film
@@ -139,6 +139,7 @@ class SmallStem(nn.Module):
         self.img_norm_type = img_norm_type
 
         self.std_convs, self.group_norms = [], []
+        _in_channels = num_inp_channels*2
         for n, (kernel_size, stride, feature, padding) in enumerate(
             zip(
                 kernel_sizes,
@@ -146,23 +147,26 @@ class SmallStem(nn.Module):
                 features,
                 padding,
             )
-        ):
+        ):  
+            
             self.std_convs.append(
                 StdConv(
-                    features=features,
+                    in_channels=_in_channels,
+                    out_channels=feature,
                     kernel_size=(kernel_size, kernel_size),
                     stride=(stride, stride),
                     padding=padding,
                 )
             )
             self.group_norms.append(nn.GroupNorm(feature, feature))
+            _in_channels = feature
             
         self.conv = nn.Conv2d(
             in_channels=features[-1],
             out_channels=num_features,
             kernel_size=(patch_size // 16, patch_size // 16),
             stride=(patch_size // 16, patch_size // 16),
-            padding="VALID",
+            padding="valid",
         )
 
         if use_film:
@@ -187,7 +191,6 @@ class SmallStem(nn.Module):
             x = self.std_convs[n](x)
             x = self.group_norms[n](x)
             x = F.relu(x)
-
         x = self.conv(x)
         if self.use_film:
             assert cond_var is not None, "Cond var is None, nothing to condition on"
@@ -265,7 +268,7 @@ class ViTResnet(nn.Module):
     num_layers: tuple = tuple()
     img_norm_type: str = "default"
 
-    def __call__(self, observations: jnp.ndarray, train: bool = True, cond_var=None):
+    def __call__(self, observations: torch.Tensor, train: bool = True, cond_var=None):
         expecting_cond_var = self.use_film
         received_cond_var = cond_var is not None
         assert (
@@ -313,7 +316,19 @@ class ViTResnet(nn.Module):
 
 
 class SmallStem16(SmallStem):
-    patch_size: int = 16
+    def __init__(
+            self,
+            use_film: bool = False,
+            patch_size: int = 16,
+            kernel_sizes: tuple = (3, 3, 3, 3),
+            strides: tuple = (2, 2, 2, 2),
+            features: tuple = (32, 96, 192, 384),
+            padding: tuple = (1, 1, 1, 1),
+            num_features: int = 512,
+            img_norm_type: str = "default",
+            num_inp_channels: int = 3,
+        ):
+        super().__init__(use_film, patch_size, kernel_sizes, strides, features, padding, num_features, img_norm_type, num_inp_channels)
 
 
 class SmallStem32(SmallStem):
