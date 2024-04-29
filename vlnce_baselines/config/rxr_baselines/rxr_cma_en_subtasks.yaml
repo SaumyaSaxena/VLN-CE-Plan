@@ -42,16 +42,17 @@ EVAL:
     SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
     NUM_ENVIRONMENTS: 1 # Number of envs per GPU
 
+
 RL:
   POLICY:
     OBS_TRANSFORMS:
       ENABLED_TRANSFORMS: [ResizeShortestEdge, CenterCropperPerSensor]
 
-IL:
+    IL:
   batch_size: 5
   epochs: 15
   inflection_weight_coef: 1.9
-  load_from_ckpt: True
+  load_from_ckpt: False
   ckpt_to_load: outputs/rxr_cma_en_subtasks/2024_01_12-14_46_50/checkpoints/ckpt.14.pth
 
   RECOLLECT_TRAINER:

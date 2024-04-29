@@ -5,7 +5,7 @@ client = OpenAI()
 
 response = client.images.generate(
   model="dall-e-3",
-  prompt="pouring water on a toaster",
+  prompt="A scale with the character Celeste (long red hair) from the video game Celeste on one side and the character The Knight from hollow knight on the other.",
   size="1024x1024",
   quality="standard",
   n=1,
@@ -18,6 +18,6 @@ print(image_url)
 
 data = requests.get(image_url).content 
 
-f = open("/home/saumyas/Projects/VLN-CE-Plan/tests/media/unsafe5.png",'wb') 
+f = open("/home/saumyas/Projects/VLN-CE-Plan/tests/media/scale2.png",'wb') 
 f.write(data) 
 f.close()

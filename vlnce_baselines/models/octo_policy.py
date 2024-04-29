@@ -24,14 +24,16 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         config: Dict,
         example_batch: Dict,
         dataset_statistics: Dict,
+        device: str = 'cuda'
     ):
         super().__init__()
-        self.module = module
+        self.module = module.to(device)
         self.seed = seed
         self.text_processor = text_processor
         self.config = config
         self.example_batch = example_batch
         self.dataset_statistics = dataset_statistics
+        self.device = device
     
     @classmethod
     def from_config(
@@ -39,6 +41,7 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         config,
         example_batch,
         dataset_statistics,
+        device: str = 'cuda'
     ):
         """Initializes a model with a fresh set of weights from a given config + example_batch.
 
@@ -51,8 +54,8 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
             rng (Optional[PRNGKey], optional): RNG key for initializing the model.
             dataset_statistics (Optional[Dict[str, Any]], optional): Dataset statistics.
         """
-        module = OctoModule.create(**config["model"])
-        text_processor = ModuleSpec.instantiate(config["text_processor"])()
+        module = OctoModule.create(**config["model"], device=device)
+        text_processor = ModuleSpec.instantiate(config["text_processor"], device)()
 
         return cls(
             module=module,
@@ -61,6 +64,7 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
             example_batch=example_batch,
             config=config,
             dataset_statistics=dataset_statistics,
+            device=device
         )
     
     def sample_actions(

@@ -46,112 +46,112 @@ from vlnce_baselines.models.octo.transformer import MAPHead
 #         raise NotImplementedError
 
 
-# def masked_mean(x, mask):
-#     mask = jnp.broadcast_to(mask, x.shape)
-#     return jnp.mean(x * mask) / jnp.clip(jnp.mean(mask), a_min=1e-5, a_max=None)
+def masked_mean(x, mask):
+    mask = torch.broadcast_to(mask, x.shape)
+    return torch.mean((x * mask).type(torch.float)) / torch.clip(torch.mean(mask.type(torch.float)), min=1e-5)
 
 
-# def chunk_actions(actions: ArrayLike, pred_horizon: int) -> Array:
-#     """Chunk actions for predicting actions `pred_horizon` steps into the future.
+def chunk_actions(actions, pred_horizon):
+    """Chunk actions for predicting actions `pred_horizon` steps into the future.
 
-#     The resulting actions have shape (batch, actions.shape[-2] - (pred_horizon - 1), pred_horizon, action_dim)
+    The resulting actions have shape (batch, actions.shape[-2] - (pred_horizon - 1), pred_horizon, action_dim)
 
-#     For example: chunk_actions([a_1, a_2, a_3, a_4, a_5], 3) ->
-#         [
-#             [a_1, a_2, a_3],
-#             [a_2, a_3, a_4],
-#             [a_3, a_4, a_5],
-#         ]
+    For example: chunk_actions([a_1, a_2, a_3, a_4, a_5], 3) ->
+        [
+            [a_1, a_2, a_3],
+            [a_2, a_3, a_4],
+            [a_3, a_4, a_5],
+        ]
 
-#     """
-#     assert (
-#         actions.ndim == 3
-#     ), f"Expected actions to have shape (batch, window_size, action_dim), but got shape {actions.shape}"
-#     window_size = actions.shape[1]
-#     assert (
-#         window_size >= pred_horizon
-#     ), f"pred_horizon {pred_horizon} too large for window size {window_size}"
-#     chunk_window_size = window_size - (pred_horizon - 1)
+    """
+    assert (
+        actions.ndim == 3
+    ), f"Expected actions to have shape (batch, window_size, action_dim), but got shape {actions.shape}"
+    window_size = actions.shape[1]
+    assert (
+        window_size >= pred_horizon
+    ), f"pred_horizon {pred_horizon} too large for window size {window_size}"
+    chunk_window_size = window_size - (pred_horizon - 1)
 
-#     curr_step = jnp.arange(chunk_window_size)
-#     action_offset = jnp.arange(pred_horizon)
-#     chunk_indices = curr_step[:, None] + action_offset[None, :]
-#     return actions[:, chunk_indices]
-
-
-# def _check_action_window_size(actions, window_size, pred_horizon):
-#     assert (
-#         actions.shape[1] >= window_size + pred_horizon - 1
-#     ), f"""
-#         To predict actions for window_size {window_size} and future prediction horizon {pred_horizon},
-#         the ground-truth actions must have at least {window_size + pred_horizon - 1} timesteps, but got shape {actions.shape}.
-
-#         Did you make sure to set "future_action_window_size" correctly in the data config?
-#     """
+    curr_step = torch.arange(chunk_window_size)
+    action_offset = torch.arange(pred_horizon)
+    chunk_indices = curr_step[:, None] + action_offset[None, :]
+    return actions[:, chunk_indices]
 
 
-# def continuous_loss(
-#     pred_value: ArrayLike,
-#     ground_truth_value: ArrayLike,
-#     mask: ArrayLike,
-#     loss_type: str = "mse",
-# ) -> Array:
-#     """
-#     Args:
-#         pred_value: shape (batch_dims...)
-#         ground_truth_value: continuous values w/ shape (batch_dims...)
-#         mask: broadcastable to ground_truth
-#     """
-#     if loss_type == "mse":
-#         loss = jnp.square(pred_value - ground_truth_value)
-#     elif loss_type == "l1":
-#         loss = jnp.abs(pred_value - ground_truth_value)
-#     else:
-#         raise ValueError(f"Invalid loss type: {loss_type}")
+def _check_action_window_size(actions, window_size, pred_horizon):
+    assert (
+        actions.shape[1] >= window_size + pred_horizon - 1
+    ), f"""
+        To predict actions for window_size {window_size} and future prediction horizon {pred_horizon},
+        the ground-truth actions must have at least {window_size + pred_horizon - 1} timesteps, but got shape {actions.shape}.
 
-#     loss = masked_mean(loss, mask)
-
-#     mse = jnp.square(pred_value - ground_truth_value)
-#     mse = masked_mean(mse, mask)
-#     return loss, {
-#         "loss": loss,
-#         "mse": mse,
-#     }
+        Did you make sure to set "future_action_window_size" correctly in the data config?
+    """
 
 
-# def discrete_loss(
-#     discrete_tokenizer: BinTokenizer,
-#     logits: ArrayLike,
-#     ground_truth_value: ArrayLike,
-#     mask: ArrayLike,
-# ) -> Array:
-#     """
-#     Args:
-#         discrete_tokenizer: BinTokenizer to use on ground_truth_value
-#         logits: shape (batch_dims..., vocab_size)
-#         ground_truth_value: continuous values in w/ shape (batch_dims...)
-#         mask: broadcastable to ground_truth_value
-#     """
-#     labels = discrete_tokenizer(ground_truth_value)
-#     labels_one_hot = jax.nn.one_hot(labels, logits.shape[-1])
+def continuous_loss(
+    pred_value,
+    ground_truth_value,
+    mask,
+    loss_type: str = "mse",
+):
+    """
+    Args:
+        pred_value: shape (batch_dims...)
+        ground_truth_value: continuous values w/ shape (batch_dims...)
+        mask: broadcastable to ground_truth
+    """
+    if loss_type == "mse":
+        loss = torch.square(pred_value - ground_truth_value)
+    elif loss_type == "l1":
+        loss = torch.abs(pred_value - ground_truth_value)
+    else:
+        raise ValueError(f"Invalid loss type: {loss_type}")
 
-#     loss = -jnp.sum(logits * labels_one_hot, axis=-1)
-#     loss = masked_mean(loss, mask)
+    loss = masked_mean(loss, mask)
 
-#     # compute accuracy between predicted actions and target actions
-#     pred_label = jnp.argmax(logits, axis=-1)
-#     accuracy = pred_label == labels
-#     accuracy = masked_mean(accuracy, mask)
+    mse = torch.square(pred_value - ground_truth_value)
+    mse = masked_mean(mse, mask)
+    return loss, {
+        "loss": loss,
+        "mse": mse,
+    }
 
-#     # detokenize the predicted actions
-#     pred_value = discrete_tokenizer.decode(pred_label)
-#     mse = jnp.square(pred_value - ground_truth_value)
-#     mse = masked_mean(mse, mask)
-#     return loss, {
-#         "loss": loss,
-#         "mse": mse,
-#         "accuracy": accuracy,
-#     }
+
+def discrete_loss(
+    discrete_tokenizer: BinTokenizer,
+    logits,
+    ground_truth_value,
+    mask,
+):
+    """
+    Args:
+        discrete_tokenizer: BinTokenizer to use on ground_truth_value
+        logits: shape (batch_dims..., vocab_size)
+        ground_truth_value: continuous values in w/ shape (batch_dims...)
+        mask: broadcastable to ground_truth_value
+    """
+    labels = discrete_tokenizer(ground_truth_value)
+    labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
+
+    loss = -torch.sum(logits * labels_one_hot, axis=-1)
+    loss = masked_mean(loss, mask)
+
+    # compute accuracy between predicted actions and target actions
+    pred_label = torch.argmax(logits, axis=-1)
+    accuracy = pred_label == labels
+    accuracy = masked_mean(accuracy, mask)
+
+    # detokenize the predicted actions
+    pred_value = discrete_tokenizer.decode(pred_label)
+    mse = torch.square(pred_value - ground_truth_value)
+    mse = masked_mean(mse, mask)
+    return loss, {
+        "loss": loss,
+        "mse": mse,
+        "accuracy": accuracy,
+    }
 
 
 # class ContinuousActionHead(nn.Module, ActionHead):
@@ -441,6 +441,7 @@ class DiffusionActionHead(nn.Module):
         hidden_dim: int = 256,
         use_layer_norm: bool = True,
         diffusion_steps: int = 20,
+        device: str = 'cuda',
     ):
         super().__init__()
         self.readout_key = readout_key
@@ -457,6 +458,7 @@ class DiffusionActionHead(nn.Module):
         self.hidden_dim = hidden_dim
         self.use_layer_norm = use_layer_norm
         self.diffusion_steps = diffusion_steps
+        self.device = device
 
         if self.use_map:
             self.map_head = MAPHead()
@@ -469,7 +471,8 @@ class DiffusionActionHead(nn.Module):
             dropout_rate=self.dropout_rate,
             hidden_dim=self.hidden_dim,
             use_layer_norm=self.use_layer_norm,
-            embedding_size=self.embedding_size
+            embedding_size=self.embedding_size,
+            device=device,
         )
 
         # create beta schedule
@@ -477,6 +480,12 @@ class DiffusionActionHead(nn.Module):
         self.alphas = 1 - self.betas
         self.alpha_hats = torch.tensor(
             [torch.prod(self.alphas[: i + 1]) for i in range(self.diffusion_steps)]
+        ).to(self.device)
+
+        self.action_tokenizer = BinTokenizer(
+            n_bins=self.action_dim,
+            bin_type="uniform",
+            device=device,
         )
 
     def forward(
@@ -499,12 +508,12 @@ class DiffusionActionHead(nn.Module):
         # Now, embeddings is (batch_size, window_size, embedding_size)
 
         if time is None:
-            time = torch.zeros((*embeddings.shape[:2], 1), dtype=torch.float32)
+            time = torch.zeros((*embeddings.shape[:2], 1), dtype=torch.float32).to(self.device)
         if noisy_actions is None:
             noisy_actions = torch.zeros(
                 (*embeddings.shape[:2], self.action_dim * self.pred_horizon),
                 dtype=torch.float32,
-            )
+            ).to(self.device)
 
         pred_eps = self.diffusion_model(embeddings, noisy_actions, time, train=train)
         return pred_eps
@@ -536,8 +545,8 @@ class DiffusionActionHead(nn.Module):
         actions_flat = rearrange(actions_chunked, "b w p a -> b w (p a)")
         actions_flat = torch.clip(actions_flat, -self.max_action, self.max_action)
         
-        time = torch.randint(0, self.diffusion_steps, (batch_size, window_size, 1))
-        noise = torch.randn(actions_flat.shape)
+        time = torch.randint(0, self.diffusion_steps, (batch_size, window_size, 1)).to(self.device)
+        noise = torch.randn(actions_flat.shape).to(self.device)
 
         alpha_hat = self.alpha_hats[time]
         alpha_1 = torch.sqrt(alpha_hat)
@@ -548,8 +557,15 @@ class DiffusionActionHead(nn.Module):
             transformer_outputs, train=train, time=time, noisy_actions=noisy_actions
         )
 
-        loss, metrics = continuous_loss(
-            pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
+        # loss, metrics = continuous_loss(
+        #     pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
+        # )
+
+        loss, metrics = discrete_loss(
+            self.action_tokenizer,
+            pred_eps,
+            noise,
+            pad_mask[:, :, None],
         )
         # Sum over action dimension instead of averaging
         loss = loss * self.action_dim
@@ -561,9 +577,9 @@ class DiffusionActionHead(nn.Module):
         self,
         transformer_outputs: Dict[str, TokenGroup],
         train: bool = True,
-        *args,
+        argmax: bool = False,
         sample_shape: tuple = (),
-        **kwargs,
+        temperature: float = 1.0,
     ) -> torch.Tensor:
         """Convenience methods for predicting actions for the final timestep in the window."""
         def scan_fn(current_x, time):
@@ -598,8 +614,18 @@ class DiffusionActionHead(nn.Module):
                 p=self.pred_horizon,
                 a=self.action_dim,
             )
-            # only get the last timestep in the window
-            return actions[:, -1]
+
+            if argmax:
+                action_tokens = torch.argmax(actions, axis=-1).astype(torch.int32)
+                action_tokens = torch.broadcast_to(
+                    action_tokens, sample_shape + action_tokens.shape
+                )
+            else:
+                dist = torch.distributions.Categorical(logits=actions / temperature)
+                action_tokens = dist.sample(sample_shape=sample_shape).astype(
+                    torch.int32
+                )
+            return self.action_tokenizer.decode(action_tokens)[:,-1] # only get the last timestep in the window
 
         n_samples = int(np.prod(sample_shape))
         actions = sample_actions(n_samples)

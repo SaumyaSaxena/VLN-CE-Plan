@@ -31,7 +31,6 @@ class CenterCropperPerSensor(ObservationTransformer):
         channels_last: bool = True,
     ) -> None:
         super().__init__()
-
         self.sensor_crops = dict(sensor_crops)
         for k in self.sensor_crops:
             size = self.sensor_crops[k]

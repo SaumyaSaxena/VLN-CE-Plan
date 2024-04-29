@@ -6,6 +6,7 @@ import tensorflow as tf
 
 MULTI_MODULE = "https://tfhub.dev/google/universal-sentence-encoder-multilingual/3"
 
+import torch
 
 class TextProcessor(ABC):
     """
@@ -28,6 +29,7 @@ class HFTokenizer(TextProcessor):
             "return_tensors": "np",
         },
         encode_with_model: bool = False,
+        device: str = 'cuda',
     ):
         from transformers import AutoTokenizer, FlaxAutoModel  # lazy import
 
@@ -46,7 +48,10 @@ class HFTokenizer(TextProcessor):
         if self.encode_with_model:
             return np.array(self.model(**inputs).last_hidden_state)
         else:
-            return dict(inputs)
+            inputs = dict(inputs)
+            inputs['input_ids'] = torch.Tensor(inputs['input_ids'])
+            inputs['attention_mask'] = torch.Tensor(inputs['attention_mask'])
+            return inputs
 
 
 class MuseEmbedding(TextProcessor):

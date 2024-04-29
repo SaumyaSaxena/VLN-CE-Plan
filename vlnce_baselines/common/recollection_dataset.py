@@ -18,6 +18,9 @@ from habitat_extensions.task import ALL_ROLES_MASK, RxRVLNCEDatasetV1
 from vlnce_baselines.common.env_utils import construct_envs
 from vlnce_baselines.common.utils import extract_instruction_tokens
 
+from habitat_baselines.common.obs_transformers import (
+    apply_obs_transforms_batch,
+)
 
 class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
     def __init__(self, config: Config):
@@ -64,7 +67,6 @@ class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
         self._observation_space = apply_obs_transforms_obs_space(
             self.envs.observation_spaces[0], self.obs_transforms
         )
-
         self.env_step = [0 for _ in range(self.envs.num_envs)]
         self._env_observations = [[] for _ in range(self.envs.num_envs)]
 
@@ -186,7 +188,8 @@ class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
             ]
 
             outputs = self.envs.step(actions)
-            observations, _, dones, _ = [list(x) for x in zip(*outputs)]
+            observations, _, dones, infos = [list(x) for x in zip(*outputs)]
+            
             observations = extract_instruction_tokens(
                 observations,
                 self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
@@ -270,3 +273,148 @@ class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
             ), "multiple workers not supported."
 
         return self
+
+class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
+    def __init__(self, policy, config: Config):
+        super().__init__(config)
+        self.policy = policy
+
+    def initialize_sims(self):
+        config = self.config.clone()
+        config.defrost()
+        config.TASK_CONFIG.MEASUREMENTS = []
+        config.freeze()
+
+        self.envs = construct_envs(
+            config,
+            get_env_class(config.ENV_NAME),
+            episodes_allowed=list(self.trajectories.keys()),
+        )
+        self.length = sum(self.envs.number_of_episodes)
+        self.obs_transforms = get_active_obs_transforms(self.config)
+        self._observation_space = apply_obs_transforms_obs_space(
+            self.envs.observation_spaces[0], self.obs_transforms
+        )
+        self.env_step = [0 for _ in range(self.envs.num_envs)]
+        self._env_observations = [[] for _ in range(self.envs.num_envs)]
+
+        observations = self.envs.reset()
+        observations = extract_instruction_tokens(
+            observations,
+            self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
+        )
+        for i, ep in enumerate(self.envs.current_episodes()):
+            path_step = self.trajectories[ep.episode_id][0]
+            self._env_observations[i].append(
+                (
+                    observations[i],
+                    path_step[0],  # prev_action
+                    path_step[2],  # oracle_action
+                    ep.instruction.instruction_text
+                )
+            )
+
+    def _load_next(self):
+        """
+        Episode length is currently not considered. We were previously batching episodes
+        together with similar lengths. Not sure if we need to bring that back.
+        """
+
+        if len(self._preload):
+            return self._preload.popleft()
+
+        while (
+            len(self._preload) < self.config.IL.RECOLLECT_TRAINER.preload_size
+        ):
+            current_episodes = self.envs.current_episodes()
+            prev_eps = current_episodes
+
+            # get the next action for each env
+            actions = [
+                self.trajectories[ep.episode_id][self.env_step[i]][1]
+                for i, ep in enumerate(current_episodes)
+            ]
+
+            outputs = self.envs.step(actions)
+            observations, _, dones, infos = [list(x) for x in zip(*outputs)]
+            
+            observations = extract_instruction_tokens(
+                observations,
+                self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
+            )
+
+            current_episodes = self.envs.current_episodes()
+
+            for i in range(self.envs.num_envs):
+                self.env_step[i] += 1
+                if dones[i]:
+                    assert len(self._env_observations[i]) == len(
+                        self.trajectories[prev_eps[i].episode_id]
+                    ), "Collected episode does not match the step count of trajectory"
+                    self._preload.append(
+                        (
+                            [o[0] for o in self._env_observations[i]],
+                            [o[1] for o in self._env_observations[i]],
+                            [o[2] for o in self._env_observations[i]],
+                            [o[3] for o in self._env_observations[i]],
+                        )
+                    )
+                    self._env_observations[i] = []
+                    self.env_step[i] = 0
+
+                path_step = self.trajectories[current_episodes[i].episode_id][
+                    self.env_step[i]
+                ]
+                self._env_observations[i].append(
+                    (
+                        observations[i],
+                        path_step[0],  # prev_action
+                        path_step[2],  # oracle_action
+                        current_episodes[i].instruction.instruction_text
+                    )
+                )
+                assert (
+                    len(self._env_observations[i])
+                    <= self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
+                ), "Trajectories should be no more than the maximum episode steps."
+
+        return self._preload.popleft()
+
+    def __next__(self):
+        """Takes about 1s to once self._load_next() has finished with a batch
+        size of 5. For this reason, we probably don't need to use extra workers.
+        """
+        x = self._load_next()
+        obs, prev_actions, oracle_actions, instructions = x
+
+        # transpose obs
+        obs_t = defaultdict(list)
+        for k in obs[0]:
+            for i in range(len(obs)):
+                obs_t[k].append(obs[i][k])
+
+            obs_t[k] = np.array(obs_t[k])
+
+        for k, v in obs_t.items():
+            obs_t[k] = torch.from_numpy(np.copy(v))
+
+        obs_t = apply_obs_transforms_batch(obs_t, self.obs_transforms)
+
+        prev_actions = torch.from_numpy(np.copy(prev_actions))
+        oracle_actions = torch.from_numpy(np.copy(oracle_actions))
+
+        inflections = torch.cat(
+            [
+                torch.tensor([1], dtype=torch.long),
+                (oracle_actions[1:] != oracle_actions[:-1]).long(),
+            ]
+        )
+        
+        tasks = self.policy.create_tasks(texts=instructions)
+        return (
+            obs_t,
+            prev_actions,
+            oracle_actions,
+            self.inflec_weights[inflections],
+            tasks,
+        )

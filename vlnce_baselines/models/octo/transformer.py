@@ -40,20 +40,21 @@ class MlpBlock(nn.Module):
         mlp_dim: int,
         out_dim: int,
         dropout_rate: float = 0.1,
+        device: str = 'cuda',
     ):
         super().__init__()
 
         self.dense_layer1 = nn.Linear(
             in_features=out_dim,
             out_features=mlp_dim
-        )
-        self.dropout1 = nn.Dropout(dropout_rate)
+        ).to(device)
+        self.dropout1 = nn.Dropout(dropout_rate).to(device)
 
         self.dense_layer2 = nn.Linear(
             in_features=mlp_dim,
             out_features=out_dim
-        )
-        self.dropout2 = nn.Dropout(dropout_rate)
+        ).to(device)
+        self.dropout2 = nn.Dropout(dropout_rate).to(device)
         self.reset_parameters()
     
     def reset_parameters(self):
@@ -146,22 +147,24 @@ class Encoder1DBlock(nn.Module):
         num_heads: int,
         dropout_rate: float = 0.1,
         attention_dropout_rate: float = 0.1,
+        device: str = 'cuda'
     ):
         super().__init__()
         self.mlp_dim = mlp_dim
+        self.device = device
 
-        self.layer_norm1 = nn.LayerNorm(token_embedding_size)
+        self.layer_norm1 = nn.LayerNorm(token_embedding_size).to(self.device)
         self.multihead_attention = nn.MultiheadAttention(
             embed_dim=token_embedding_size,
             num_heads=num_heads,
             dropout=attention_dropout_rate,
             batch_first=True
-        )
+        ).to(self.device)
 
-        self.dropout = nn.Dropout(dropout_rate)
+        self.dropout = nn.Dropout(dropout_rate).to(self.device)
 
-        self.layer_norm2 = nn.LayerNorm(token_embedding_size)
-        self.mlp_block = MlpBlock(mlp_dim=mlp_dim, out_dim=token_embedding_size, dropout_rate=dropout_rate)
+        self.layer_norm2 = nn.LayerNorm(token_embedding_size).to(self.device)
+        self.mlp_block = MlpBlock(mlp_dim=mlp_dim, out_dim=token_embedding_size, dropout_rate=dropout_rate, device=device)
         
 
     def forward(self, inputs, attention_mask):
@@ -209,10 +212,12 @@ class Transformer(nn.Module):
         add_position_embedding: bool = False,
         window_size: int = 2,
         token_embedding_size: int = 384,
+        device: str = 'cuda',
     ):
         super().__init__()
         self.num_layers = num_layers
         self.add_position_embedding = add_position_embedding
+        self.device = device
 
         self.position_emb = AddPositionEmbs(window_size=window_size, dim=mlp_dim)
         self.pos_emb_dropout = nn.Dropout(dropout_rate)
@@ -226,10 +231,11 @@ class Transformer(nn.Module):
                     dropout_rate=dropout_rate,
                     attention_dropout_rate=attention_dropout_rate,
                     num_heads=num_attention_heads,
+                    device=device,
                 )
             )
         
-        self.layer_norm = nn.LayerNorm(token_embedding_size)
+        self.layer_norm = nn.LayerNorm(token_embedding_size).to(self.device)
 
     def forward(self, x, attention_mask, *, train):
         """Applies Transformer model on the inputs.

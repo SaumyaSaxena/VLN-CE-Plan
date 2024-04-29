@@ -56,14 +56,14 @@ class ModuleSpec(TypedDict):
         return ModuleSpec(module=module, name=name, args=args, kwargs=kwargs)
 
     @staticmethod
-    def instantiate(spec: "ModuleSpec"):  # type: ignore
+    def instantiate(spec: "ModuleSpec", device: str):  # type: ignore
         if set(spec.keys()) != {"module", "name", "args", "kwargs"}:
             raise ValueError(
                 f"Expected ModuleSpec, but got {spec}. "
                 "ModuleSpec must have keys 'module', 'name', 'args', and 'kwargs'."
             )
         cls = _import_from_string(spec["module"], spec["name"])
-        return partial(cls, *spec["args"], **spec["kwargs"])
+        return partial(cls, *spec["args"], **spec["kwargs"], device=device)
 
     @staticmethod
     def to_string(spec: "ModuleSpec"):  # type: ignore

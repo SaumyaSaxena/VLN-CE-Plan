@@ -40,12 +40,13 @@ class ScoreActor(nn.Module):
 
 
 class FourierFeatures(nn.Module):
-    def __init__(self, output_size: int, input_dim: int = 1, learnable: bool = True):
+    def __init__(self, output_size: int, input_dim: int = 1, learnable: bool = True, device: str = 'cuda'):
         super().__init__()
         self.output_size = output_size
         self.learnable = learnable
+        self.device = device
 
-        self.w = nn.Embedding(output_size // 2, input_dim) # input_dim=1 for time
+        self.w = nn.Embedding(output_size // 2, input_dim).to(self.device) # input_dim=1 for time
     
     def reset_parameters(self):
         nn.init.normal_(self.w.weight, std=0.2)
@@ -56,7 +57,7 @@ class FourierFeatures(nn.Module):
         else:
             half_dim = self.output_size // 2
             f = torch.log(10000) / (half_dim - 1)
-            f = torch.exp(torch.arange(half_dim) * -f)
+            f = torch.exp(torch.arange(half_dim).to(self.device) * -f)
             f = x * f
         return torch.concatenate([torch.cos(f), torch.sin(f)], axis=-1)
 
@@ -69,6 +70,7 @@ class MLP(nn.Module):
         activate_final: bool = False,
         use_layer_norm: bool = False,
         dropout_rate: Optional[float] = None,
+        device: str = 'cuda'
     ):
         super().__init__()
         self.hidden_dims = hidden_dims
@@ -76,6 +78,7 @@ class MLP(nn.Module):
         self.activate_final = activate_final
         self.use_layer_norm = use_layer_norm
         self.dropout_rate = dropout_rate
+        self.device = device
 
         self.dense_layers = []
         self.dropout_layers = []
@@ -83,17 +86,18 @@ class MLP(nn.Module):
         _input_dim = input_dim
         for i, size in enumerate(self.hidden_dims):
             self.dense_layers.append(nn.Linear(
-                    in_features=_input_dim,
-                    out_features=size
-            ))
+                        in_features=_input_dim,
+                        out_features=size
+                ).to(self.device)
+            )
             
             if i + 1 < len(hidden_dims) or activate_final:
                 if dropout_rate is not None and dropout_rate > 0:
                     self.dropout_layers.append(
-                        nn.Dropout(dropout_rate)
+                        nn.Dropout(dropout_rate).to(self.device)
                     )
                 if use_layer_norm:
-                    self.layer_norms.append(nn.LayerNorm(_input_dim))
+                    self.layer_norms.append(nn.LayerNorm(_input_dim).to(self.device))
             _input_dim = size
 
 
@@ -117,27 +121,29 @@ class MLPResNetBlock(nn.Module):
         act: Callable,
         dropout_rate: float = None,
         use_layer_norm: bool = False,
+        device: str = 'cuda'
     ):  
         super().__init__()
         self.act = act
         self.use_layer_norm = use_layer_norm
         self.dropout_rate = dropout_rate
+        self.device = device
 
-        self.dropout = nn.Dropout(dropout_rate)
-        self.layer_norm = nn.LayerNorm(features)
+        self.dropout = nn.Dropout(dropout_rate).to(self.device)
+        self.layer_norm = nn.LayerNorm(features).to(self.device)
         self.dense_layer1 = nn.Linear(
             in_features=features,
             out_features=features * 4
-        )
+        ).to(self.device)
         self.dense_layer2 = nn.Linear(
             in_features=features * 4,
             out_features=features
-        )
+        ).to(self.device)
 
         self.dense_layer3 = nn.Linear(
             in_features=features,
             out_features=features
-        )
+        ).to(self.device)
 
     def forward(self, x, train: bool = False):
         residual = x
@@ -164,27 +170,30 @@ class MLPResNet(nn.Module):
         use_layer_norm: bool = False,
         hidden_dim: int = 256,
         activation: Callable = nn.SiLU(),
+        device: str = 'cuda',
     ):  
         super().__init__()
         self.num_blocks = num_blocks
         self.activation = activation
+        self.device = device
 
         self.dense_layer1 = nn.Linear(
             in_features=inp_dim,
             out_features=hidden_dim
-        )
+        ).to(self.device)
 
         self.mlp_resnet_block = MLPResNetBlock(
             hidden_dim,
             act=activation,
             use_layer_norm=use_layer_norm,
             dropout_rate=dropout_rate,
+            device=self.device,
         )
 
         self.dense_layer2 = nn.Linear(
             in_features=hidden_dim,
             out_features=out_dim
-        )
+        ).to(self.device)
 
     def forward(self, x: torch.Tensor, train: bool = False) -> torch.Tensor:
         x = self.dense_layer1(x)
@@ -203,11 +212,12 @@ def create_diffusion_model(
     hidden_dim: int,
     use_layer_norm: bool,
     embedding_size: int,
+    device,
 ):  
     inp_dim = time_dim + embedding_size + out_dim
     return ScoreActor(
-        FourierFeatures(time_dim, learnable=True),
-        MLP(time_dim, (2 * time_dim, time_dim)),
+        FourierFeatures(time_dim, learnable=True, device=device),
+        MLP(time_dim, (2 * time_dim, time_dim), device=device),
         MLPResNet(
             num_blocks,
             inp_dim,
@@ -215,5 +225,6 @@ def create_diffusion_model(
             dropout_rate=dropout_rate,
             hidden_dim=hidden_dim,
             use_layer_norm=use_layer_norm,
+            device=device,
         ),
-    )
+    ).to(device)

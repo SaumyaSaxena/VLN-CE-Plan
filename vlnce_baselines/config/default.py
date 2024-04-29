@@ -92,6 +92,25 @@ _C.IL.RECOLLECT_TRAINER.gt_file = (
 )
 
 # ----------------------------------------------------------------------------
+# IL: OCTO TRAINER CONFIG
+# ----------------------------------------------------------------------------
+_C.IL.OCTO_TRAINER = CN()
+_C.IL.OCTO_TRAINER.preload_trajectories_file = False
+_C.IL.OCTO_TRAINER.trajectories_file = (
+    "data/trajectories_dirs/debug/trajectories.json.gz"
+)
+# if set to a positive int, episodes with longer paths are ignored in training
+_C.IL.OCTO_TRAINER.max_traj_len = -1
+# if set to a positive int, effective_batch_size must be some multiple of
+# IL.batch_size. Gradient accumulation enables an arbitrarily high "effective"
+# batch size.
+_C.IL.OCTO_TRAINER.effective_batch_size = -1
+_C.IL.OCTO_TRAINER.preload_size = 30
+_C.IL.OCTO_TRAINER.gt_file = (
+    "data/datasets/RxR_VLNCE_v0/{split}/{split}_{role}_gt.json.gz"
+)
+
+# ----------------------------------------------------------------------------
 # IL: DAGGER CONFIG
 # ----------------------------------------------------------------------------
 _C.IL.DAGGER = CN()
@@ -169,10 +188,13 @@ _C.RL.POLICY.OBS_TRANSFORMS.OBS_STACK.SENSOR_REWRITES = [
     ),
 ]
 _C.RL.POLICY.OBS_TRANSFORMS.CENTER_CROPPER_PER_SENSOR = CN()
-_C.RL.POLICY.OBS_TRANSFORMS.CENTER_CROPPER_PER_SENSOR.SENSOR_CROPS = [
-    ("rgb", (224, 224)),
-    ("depth", (256, 256)),
-]
+# _C.RL.POLICY.OBS_TRANSFORMS.CENTER_CROPPER_PER_SENSOR.SENSOR_CROPS = [
+#     ("rgb", (224, 224)),
+#     ("depth", (256, 256)),
+# ]
+_C.RL.POLICY.OBS_TRANSFORMS.CENTER_CROPPER_PER_SENSOR.SENSOR_CROPS = CN()
+_C.RL.POLICY.OBS_TRANSFORMS.CENTER_CROPPER_PER_SENSOR.SENSOR_CROPS.rgb = (224, 224)
+_C.RL.POLICY.OBS_TRANSFORMS.CENTER_CROPPER_PER_SENSOR.SENSOR_CROPS.depth = (256, 256)
 # ----------------------------------------------------------------------------
 # PROXIMAL POLICY OPTIMIZATION (PPO)
 # ----------------------------------------------------------------------------

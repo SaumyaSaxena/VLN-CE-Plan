@@ -90,8 +90,6 @@ class TokenMetadata:
     attention_rules[self.name] = AttentionRule.NEVER
     """
 
-    
-
     def __init__(self,
         name: str,
         timestep: int,  # -1 for prefix tokens
@@ -135,12 +133,13 @@ def split_tokens(ary: torch.Tensor, n_tokens_per_group: Sequence[int], axis: int
 class BlockTransformer(nn.Module):
     """A transformer that acts on multiple groups of tokens, which may attend to each other (in complex patterns)."""
 
-    def __init__(self, transformer_kwargs: Dict, enforce_causal: bool = True):
+    def __init__(self, transformer_kwargs: Dict, enforce_causal: bool = True, device: str = 'cuda'):
         super().__init__()
         # Enforce that timestep causal structure is not broken (future timesteps can't attend to past timesteps)
         self.enforce_causal = enforce_causal
         self.num_attention_heads = transformer_kwargs['num_attention_heads']
-        self.transformer = Transformer(**transformer_kwargs)
+        self.transformer = Transformer(**transformer_kwargs, device=device)
+        self.device = device
 
     def forward(
         self,
@@ -313,7 +312,7 @@ class BlockTransformer(nn.Module):
             self.verify_causality(prefix_groups, timestep_groups)
 
         def _get_position(i, tokens_per_elem):
-            return torch.searchsorted(torch.cumsum(torch.Tensor(tokens_per_elem),dim=0), i)
+            return torch.searchsorted(torch.cumsum(torch.tensor(tokens_per_elem, device=self.device),dim=0), i)
 
         horizon = timestep_groups[0].tokens.shape[1]
         tokens_per_prefix_group = [group.tokens.shape[1] for group in prefix_groups]
@@ -323,7 +322,7 @@ class BlockTransformer(nn.Module):
         tokens_per_time_step = sum(tokens_per_timestep_group)
 
         total_tokens = tokens_for_prefix + tokens_per_time_step * horizon
-        attention_mask = torch.zeros((total_tokens, total_tokens), dtype=int)
+        attention_mask = torch.zeros((total_tokens, total_tokens), dtype=int, device=self.device)
 
         def get_token_metadata(i):
             if i < tokens_for_prefix:
@@ -367,7 +366,7 @@ class BlockTransformer(nn.Module):
                 [group.mask for group in prefix_groups], axis=1
             )
         else:
-            prefix_pad_mask = torch.zeros((batch_size, 0), dtype=torch.bool_)
+            prefix_pad_mask = torch.zeros((batch_size, 0), dtype=torch.bool_, device=self.device)
         timestep_pad_mask = torch.concatenate(
             [group.mask for group in timestep_groups], axis=2
         )

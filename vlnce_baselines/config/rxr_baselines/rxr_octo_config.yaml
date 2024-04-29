@@ -10,7 +10,12 @@ resume_path: null
 save_dir: null
 save_interval: 10000
 start_step: null
-window_size: 2
+
+window_size: 1
+num_inp_channels: 4 # RGBD input
+pred_horizon: 1
+
+
 
 viz_interval: 20000
 viz_kwargs:
@@ -107,8 +112,8 @@ model:
     action:
       args: []
       kwargs:
-        action_dim: 7
-        pred_horizon: 4
+        action_dim: 6
+        pred_horizon: ${pred_horizon}
         readout_key: readout_action
         use_map: false
         embedding_size: ${model.token_embedding_size}
@@ -122,27 +127,12 @@ model:
         encoder:
           args: []
           kwargs:
-            num_inp_channels: 6 # NOTE: obs_stack_keys and task_stack_keys are concatenated
+            num_inp_channels: ${num_inp_channels} # NOTE: task_stack_keys is empty
           module: vlnce_baselines.models.octo.vit_encoders
           name: SmallStem16
         obs_stack_keys:
         - image_primary
-        task_stack_keys:
-        - image_primary
-      module: vlnce_baselines.models.octo.tokenizers
-      name: ImageTokenizer
-    wrist:
-      args: []
-      kwargs:
-        encoder:
-          args: []
-          kwargs: {}
-          module: vlnce_baselines.models.octo.vit_encoders
-          name: SmallStem16
-        obs_stack_keys:
-        - image_wrist
-        task_stack_keys:
-        - image_wrist
+        task_stack_keys: []
       module: vlnce_baselines.models.octo.tokenizers
       name: ImageTokenizer
   readouts:

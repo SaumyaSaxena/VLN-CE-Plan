@@ -6,6 +6,14 @@ NUM_ENVIRONMENTS: 1 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en_subtasks
 CHECKPOINT_FOLDER: outputs/rxr_octo_en_subtasks
 CONTEXT_LEARNING: True
+OCTO_CONFIG_PATH: '/home/saumyas/Projects/VLN-CE-Plan/vlnce_baselines/config/rxr_baselines/rxr_octo_config.yaml'
+
+wandb:
+  entity: iam-lab
+  group: octo
+  project: vlnce_plan
+  name: discrete_loss
+wandb_resume_id: null
 
 EVAL:
   USE_CKPT_CONFIG: True
@@ -53,11 +61,20 @@ MODEL:
     sensor_uuid: rxr_instruction
     embedding_size: 768
 
+RL:
+  POLICY:
+    OBS_TRANSFORMS:
+      ENABLED_TRANSFORMS: [ResizeShortestEdge, CenterCropperPerSensor]
+      CENTER_CROPPER_PER_SENSOR:
+        SENSOR_CROPS:
+          rgb: (256, 256)
+          depth: (256, 256)
+
 IL:
-  batch_size: 5
+  batch_size: 1
   epochs: 15
   inflection_weight_coef: 1.9
-  load_from_ckpt: True
+  load_from_ckpt: False
   ckpt_to_load: outputs/rxr_octo_en_subtasks/2024_01_12-14_46_50/checkpoints/ckpt.14.pth
 
   OCTO_TRAINER:
@@ -65,3 +82,4 @@ IL:
     preload_trajectories_file: False
     trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories_subtasks_merged.json.gz
     max_traj_len: 250  # 1.3% of episodes in the English training split are above 250
+    logger_type: 'wandb' # 'wandb', 'tb'

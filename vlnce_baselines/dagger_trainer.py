@@ -56,7 +56,6 @@ def collate_fn(batch):
         return torch.cat([t, pad], dim=0)
 
     transposed = list(zip(*batch))
-
     observations_batch = list(transposed[0])
     prev_actions_batch = list(transposed[1])
     corrected_actions_batch = list(transposed[2])
@@ -71,8 +70,8 @@ def collate_fn(batch):
             )
 
     observations_batch = new_observations_batch
-
     max_traj_len = max(ele.size(0) for ele in prev_actions_batch)
+
     for bid in range(B):
         for sensor in observations_batch:
             observations_batch[sensor][bid] = _pad_helper(
@@ -93,7 +92,7 @@ def collate_fn(batch):
         )
         observations_batch[sensor] = observations_batch[sensor].view(
             -1, *observations_batch[sensor].size()[2:]
-        )
+        ) # for observations the first dim is batch_size*max_traj_len
 
     prev_actions_batch = torch.stack(prev_actions_batch, dim=1)
     corrected_actions_batch = torch.stack(corrected_actions_batch, dim=1)

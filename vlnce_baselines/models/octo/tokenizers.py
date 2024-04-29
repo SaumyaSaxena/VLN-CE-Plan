@@ -92,6 +92,7 @@ class ImageTokenizer(nn.Module):
         task_stack_keys: Sequence[str] = tuple(),
         task_film_keys: Sequence[str] = tuple(),
         proper_pad_mask: bool = True,
+        device: str = 'cuda',
     ):
         super().__init__()
         self.use_token_learner = use_token_learner
@@ -101,8 +102,9 @@ class ImageTokenizer(nn.Module):
         self.task_stack_keys = task_stack_keys
         self.task_film_keys = task_film_keys
         self.proper_pad_mask = proper_pad_mask
+        self.device = device
 
-        self.encoder_def = ModuleSpec.instantiate(encoder)()
+        self.encoder_def = ModuleSpec.instantiate(encoder, device)()
     
     def forward(
         self,
@@ -140,7 +142,7 @@ class ImageTokenizer(nn.Module):
                     # tasks = flax.core.copy(
                     #     tasks, {k: torch.zeros_like(observations[k][:, 0])}
                     # )
-                    tasks['k'] = torch.zeros_like(observations[k][:, 0])
+                    tasks['k'] = torch.zeros_like(observations[k][:, 0]).to(self.device)
             task_stack_keys = regex_filter(self.task_stack_keys, sorted(tasks.keys()))
             if len(task_stack_keys) == 0:
                 raise ValueError(
@@ -200,11 +202,13 @@ class LanguageTokenizer(nn.Module):
         encoder: str = None,
         finetune_encoder: bool = False,
         proper_pad_mask: bool = True,
+        device: str = 'cuda',
     ):
         super().__init__()
         self.encoder = encoder
         self.finetune_encoder = finetune_encoder
         self.proper_pad_mask = proper_pad_mask
+        self.device = device
 
         if encoder is not None:
             from transformers import AutoConfig, AutoModelForSeq2SeqLM, T5ForConditionalGeneration
@@ -212,9 +216,9 @@ class LanguageTokenizer(nn.Module):
             config = AutoConfig.from_pretrained(self.encoder)
             self.hidden_dim = config.d_model
             if "t5" in self.encoder:
-                self.hf_model = T5ForConditionalGeneration.from_pretrained(self.encoder)
+                self.hf_model = T5ForConditionalGeneration.from_pretrained(self.encoder).to(self.device)
             else:
-                self.hf_model = AutoModelForSeq2SeqLM.from_pretrained(self.encoder)
+                self.hf_model = AutoModelForSeq2SeqLM.from_pretrained(self.encoder).to(self.device)
 
     def forward(
         self,
@@ -230,18 +234,20 @@ class LanguageTokenizer(nn.Module):
             assert (
                 self.encoder is not None
             ), "Received language tokens but no encoder specified."
-            decoder_input_ids = torch.tensor([[0]])
+            bs = tasks["language_instruction"]['input_ids'].shape[0]
+            decoder_input_ids = torch.tensor([[0]]*bs).to(self.device)
+
             if not self.finetune_encoder:
                 with torch.no_grad():
                     tokens = self.hf_model(
-                        input_ids=torch.LongTensor(tasks["language_instruction"]['input_ids']),
-                        attention_mask=torch.FloatTensor(tasks["language_instruction"]['attention_mask']), 
+                        input_ids=tasks["language_instruction"]['input_ids'].type(torch.long),
+                        attention_mask=tasks["language_instruction"]['attention_mask'], 
                         decoder_input_ids=decoder_input_ids).encoder_last_hidden_state
             else:
                 tokens = self.hf_model(
-                        input_ids=torch.LongTensor(tasks["language_instruction"]['input_ids']),
-                        attention_mask=torch.FloatTensor(tasks["language_instruction"]['attention_mask']), 
-                        decoder_input_ids=decoder_input_ids).encoder_last_hidden_state
+                    input_ids=tasks["language_instruction"]['input_ids'].type(torch.long),
+                    attention_mask=tasks["language_instruction"]['attention_mask'], 
+                    decoder_input_ids=decoder_input_ids).encoder_last_hidden_state
         else:
             # add a # tokens dimension to language
             if tasks["language_instruction"].ndim == 2:
@@ -257,7 +263,7 @@ class LanguageTokenizer(nn.Module):
                 ("language_instruction",),
             )
         else:
-            pad_mask = torch.ones(tokens.shape[:-1])  # TODO(saumya): device?
+            pad_mask = torch.ones(tokens.shape[:-1], device=self.device)  # TODO(saumya): device?
 
         return TokenGroup(tokens, pad_mask)
 
@@ -272,30 +278,39 @@ class BinTokenizer(nn.Module):
         low (float): Lower bound for bin range.
         high (float): Upper bound for bin range.
     """
-
-    n_bins: int
-    bin_type: str = "uniform"
-    low: float = 0
-    high: float = 1
+    def __init__(self,
+        n_bins: int,
+        bin_type: str = "uniform",
+        low: float = 0,
+        high: float = 1,
+        device: str = 'cuda',
+    ):
+        super().__init__()
+        self.n_bins = n_bins
+        self.bin_type = bin_type
+        self.low = low
+        self.high = high
+        self.device = device
+        self.setup()
 
     def setup(self):
         if self.bin_type == "uniform":
-            self.thresholds = torch.linspace(self.low, self.high, self.n_bins + 1)
+            self.thresholds = torch.linspace(self.low, self.high, self.n_bins + 1).to(self.device)
         elif self.bin_type == "normal":
-            normal = torch.distributions.Normal(0,1)
-            self.thresholds = normal.icdf(torch.linspace(EPS, 1 - EPS, self.n_bins + 1)) #TODO(saumya): check
+            normal = torch.distributions.Normal(0,1).to(self.device)
+            self.thresholds = normal.icdf(torch.linspace(EPS, 1 - EPS, self.n_bins + 1).to(self.device)) #TODO(saumya): check
         else:
             raise ValueError(
                 f"Binning type {self.bin_type} not supported in BinTokenizer."
             )
 
-    def __call__(self, inputs):
+    def forward(self, inputs):
         if self.bin_type == "uniform":
             inputs = torch.clip(inputs, self.low + EPS, self.high - EPS)
         inputs = inputs[..., None]
         token_one_hot = (inputs < self.thresholds[1:]) & (
             inputs >= self.thresholds[:-1]
-        ).astype(torch.uint8)
+        ).type(torch.uint8)
         output_tokens = torch.argmax(token_one_hot, axis=-1)
         return output_tokens
 

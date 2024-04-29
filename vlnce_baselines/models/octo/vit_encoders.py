@@ -127,6 +127,7 @@ class SmallStem(nn.Module):
         num_features: int = 512,
         img_norm_type: str = "default",
         num_inp_channels: int = 3,
+        device: str = 'cuda',
     ):
         super().__init__()
         self.use_film = use_film
@@ -137,9 +138,10 @@ class SmallStem(nn.Module):
         self.padding = padding
         self.num_features = num_features
         self.img_norm_type = img_norm_type
+        self.device = device
 
         self.std_convs, self.group_norms = [], []
-        _in_channels = num_inp_channels*2
+        _in_channels = num_inp_channels
         for n, (kernel_size, stride, feature, padding) in enumerate(
             zip(
                 kernel_sizes,
@@ -156,9 +158,9 @@ class SmallStem(nn.Module):
                     kernel_size=(kernel_size, kernel_size),
                     stride=(stride, stride),
                     padding=padding,
-                )
+                ).to(self.device)
             )
-            self.group_norms.append(nn.GroupNorm(feature, feature))
+            self.group_norms.append(nn.GroupNorm(feature, feature).to(self.device))
             _in_channels = feature
             
         self.conv = nn.Conv2d(
@@ -167,7 +169,7 @@ class SmallStem(nn.Module):
             kernel_size=(patch_size // 16, patch_size // 16),
             stride=(patch_size // 16, patch_size // 16),
             padding="valid",
-        )
+        ).to(self.device)
 
         if use_film:
             self.film_conditioning = FilmConditioning()
@@ -327,8 +329,9 @@ class SmallStem16(SmallStem):
             num_features: int = 512,
             img_norm_type: str = "default",
             num_inp_channels: int = 3,
+            device: str = 'cuda,'
         ):
-        super().__init__(use_film, patch_size, kernel_sizes, strides, features, padding, num_features, img_norm_type, num_inp_channels)
+        super().__init__(use_film, patch_size, kernel_sizes, strides, features, padding, num_features, img_norm_type, num_inp_channels, device)
 
 
 class SmallStem32(SmallStem):

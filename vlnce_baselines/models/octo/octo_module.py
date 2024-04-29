@@ -78,6 +78,7 @@ class OctoTransformer(nn.Module):
         token_embedding_size: int,
         max_horizon: int,
         max_tokens: int,
+        device: str,
     ):
         super().__init__()
         self.observation_tokenizers = observation_tokenizers
@@ -87,6 +88,7 @@ class OctoTransformer(nn.Module):
         self.token_embedding_size = token_embedding_size
         self.max_horizon = max_horizon
         self.max_tokens = max_tokens
+        self.device = device
 
         self.task_dense_layers = []
         self.task_pos_emb = []
@@ -95,9 +97,9 @@ class OctoTransformer(nn.Module):
                 nn.Linear(
                     in_features=tok.hidden_dim,
                     out_features=token_embedding_size
-                )
+                ).to(self.device)
             )
-            self.task_pos_emb.append(nn.Embedding(max_tokens, token_embedding_size))
+            self.task_pos_emb.append(nn.Embedding(max_tokens, token_embedding_size).to(self.device))
 
         self.observation_dense_layers = []
         self.observation_pos_emb = []
@@ -106,15 +108,17 @@ class OctoTransformer(nn.Module):
                 nn.Linear(
                     in_features=tok.encoder_def.num_features, 
                     out_features=token_embedding_size
-                )
+                ).to(self.device)
             )
-            self.observation_pos_emb.append(nn.Embedding(max_horizon*tok.num_tokens, token_embedding_size)) # TODO(saumya): tok.num_tokens is only correct only for image size 256*256
+            self.observation_pos_emb.append(
+                nn.Embedding(max_horizon*tok.num_tokens, token_embedding_size).to(self.device)
+            ) # TODO(saumya): tok.num_tokens is only correct only for image size 256*256
 
         self.readout_pos_emb = []
         for _, n_tokens in self.readouts.items():
-            self.readout_pos_emb.append(nn.Embedding(max_horizon*n_tokens, token_embedding_size))
+            self.readout_pos_emb.append(nn.Embedding(max_horizon*n_tokens, token_embedding_size).to(self.device))
 
-        self.block_transformer = BlockTransformer(transformer_kwargs)
+        self.block_transformer = BlockTransformer(transformer_kwargs, device = device)
         # self.reset_parameters()
 
     # def reset_parameters(self):
@@ -204,7 +208,7 @@ class OctoTransformer(nn.Module):
             # task_tokens shape is (batch, n_tokens, token_embedding_size)
 
             # Add positional embedding
-            embedding = self.task_pos_emb[i](torch.arange(self.max_tokens)) #TODO(saumya): device?
+            embedding = self.task_pos_emb[i](torch.arange(self.max_tokens).to(self.device)) #TODO(saumya): device?
             task_tokens += torch.broadcast_to(embedding, task_tokens.shape)
 
             all_prefix_groups.append(
@@ -231,7 +235,7 @@ class OctoTransformer(nn.Module):
             # obs_tokens shape is (batch, horizon, n_tokens, token_embedding_size)
 
             # Add positional embedding
-            embedding = self.observation_pos_emb[i](torch.arange(tok.num_tokens*horizon)) # Use only the timesteps we receive as input
+            embedding = self.observation_pos_emb[i](torch.arange(tok.num_tokens*horizon).to(self.device)) # Use only the timesteps we receive as input
             embedding = embedding.reshape(1, *obs_tokens.shape[1:])
             obs_tokens += torch.broadcast_to(embedding, obs_tokens.shape)
 
@@ -255,14 +259,15 @@ class OctoTransformer(nn.Module):
             # Readouts do not correspond to any inputs, just positional embeddings
             n_tokens_for_readout = self.readouts[readout_name]
             readout_tokens = torch.zeros(
-                (batch_size, horizon, n_tokens_for_readout, self.token_embedding_size)
+                (batch_size, horizon, n_tokens_for_readout, self.token_embedding_size),
+                device=self.device
             ) # TODO(saumya): device?
             # Add positional embedding
-            embedding = self.readout_pos_emb[i](torch.arange(n_tokens_for_readout*horizon)) # Use only the timesteps we receive as input
+            embedding = self.readout_pos_emb[i](torch.arange(n_tokens_for_readout*horizon).to(self.device)) # Use only the timesteps we receive as input
             embedding = embedding.reshape(1, horizon, n_tokens_for_readout, self.token_embedding_size)
             readout_tokens += torch.broadcast_to(embedding, readout_tokens.shape)
 
-            readout_mask = torch.ones((batch_size, horizon, n_tokens_for_readout)) # TODO(saumya): device?
+            readout_mask = torch.ones((batch_size, horizon, n_tokens_for_readout), device=self.device) # TODO(saumya): device?
             readout_attention_rules = {
                 "task_*": AttentionRule.CAUSAL,
                 "obs_*": AttentionRule.CAUSAL,
@@ -387,6 +392,7 @@ class OctoModule(nn.Module):
         token_embedding_size: int,
         max_tokens: int,
         max_horizon: int,
+        device: str = 'cuda'
     ) -> "OctoModule":
         """
         Canonical way to create an OctoModule from configuration.
@@ -407,14 +413,14 @@ class OctoModule(nn.Module):
                 attention_dropout_rate (float): dropout rate in self attention.
         """
         observation_tokenizer_defs = {
-            k: ModuleSpec.instantiate(spec)()
+            k: ModuleSpec.instantiate(spec, device)()
             for k, spec in observation_tokenizers.items()
         }
         task_tokenizer_defs = {
-            k: ModuleSpec.instantiate(spec)() for k, spec in task_tokenizers.items()
+            k: ModuleSpec.instantiate(spec, device)() for k, spec in task_tokenizers.items()
         }
 
-        head_defs = {k: ModuleSpec.instantiate(spec)() for k, spec in heads.items()}
+        head_defs = {k: ModuleSpec.instantiate(spec, device)() for k, spec in heads.items()}
 
         model_def = OctoTransformer(
             observation_tokenizers=observation_tokenizer_defs,
@@ -424,6 +430,7 @@ class OctoModule(nn.Module):
             max_horizon=max_horizon,
             max_tokens=max_tokens,
             transformer_kwargs=transformer_kwargs,
+            device=device,
         )
 
         return cls(
