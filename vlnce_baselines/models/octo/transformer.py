@@ -1,5 +1,6 @@
 # adapted from https://github.com/google-research/vision_transformer/blob/main/vit_jax/models_vit.py
 from typing import Callable, Optional, Union, Any
+import itertools
 
 import torch
 import torch.nn as nn
@@ -236,6 +237,17 @@ class Transformer(nn.Module):
             )
         
         self.layer_norm = nn.LayerNorm(token_embedding_size).to(self.device)
+
+    def get_trainable_parameters(self):
+        encoder_params = [b.parameters() for b in self.encoder_blocks]
+        encoder_params = list(itertools.chain(*encoder_params))
+        params = (
+            encoder_params + \
+            list(self.position_emb.parameters()) + \
+            list(self.pos_emb_dropout.parameters()) + \
+            list(self.layer_norm.parameters())
+        )
+        return params
 
     def forward(self, x, attention_mask, *, train):
         """Applies Transformer model on the inputs.

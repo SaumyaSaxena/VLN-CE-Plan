@@ -92,7 +92,7 @@ class OctoTransformer(nn.Module):
 
         self.task_dense_layers = []
         self.task_pos_emb = []
-        for _, tok in task_tokenizers.items():
+        for _, tok in self.task_tokenizers.items():
             self.task_dense_layers.append(
                 nn.Linear(
                     in_features=tok.hidden_dim,
@@ -103,7 +103,7 @@ class OctoTransformer(nn.Module):
 
         self.observation_dense_layers = []
         self.observation_pos_emb = []
-        for _, tok in observation_tokenizers.items():
+        for _, tok in self.observation_tokenizers.items():
             self.observation_dense_layers.append(
                 nn.Linear(
                     in_features=tok.encoder_def.num_features, 
@@ -125,6 +125,27 @@ class OctoTransformer(nn.Module):
     #     nn.init.normal_(self.embedding1.weight)
     #     nn.init.normal_(self.embedding1.weight)
     
+    def get_trainable_parameters(self):
+        task_tok_params = [
+            param 
+            for _, tok in self.task_tokenizers.items()
+            for param in tok.get_trainable_parameters()
+        ]
+        obs_tok_params = [
+            param
+            for _, tok in self.observation_tokenizers.items()
+            for param in tok.get_trainable_parameters()
+        ]
+
+        other_params = [param for layer in (
+            self.task_dense_layers + self.task_pos_emb + \
+            self.observation_dense_layers + self.observation_pos_emb + \
+            self.readout_pos_emb
+        ) for param in layer.parameters()]
+        
+        trans_params = self.block_transformer.get_trainable_parameters() # returns a list
+        return (task_tok_params + obs_tok_params + other_params + trans_params)
+        
 
     def forward(
         self,
@@ -267,7 +288,7 @@ class OctoTransformer(nn.Module):
             embedding = embedding.reshape(1, horizon, n_tokens_for_readout, self.token_embedding_size)
             readout_tokens += torch.broadcast_to(embedding, readout_tokens.shape)
 
-            readout_mask = torch.ones((batch_size, horizon, n_tokens_for_readout), device=self.device) # TODO(saumya): device?
+            readout_mask = torch.ones((batch_size, horizon, n_tokens_for_readout), device=self.device)
             readout_attention_rules = {
                 "task_*": AttentionRule.CAUSAL,
                 "obs_*": AttentionRule.CAUSAL,
@@ -356,6 +377,15 @@ class OctoModule(nn.Module):
         super().__init__()
         self.octo_transformer = octo_transformer
         self.heads = heads
+
+    def get_trainable_parameters(self):
+        octo_transformer_params = self.octo_transformer.get_trainable_parameters()
+        head_params = [
+            param
+            for _, head in self.heads.items()
+            for param in head.get_trainable_parameters()
+        ]
+        return (octo_transformer_params + head_params)
 
     def forward(self, observations, tasks, pad_mask, train=True, verbose=False):
         """Run transformer and the main method for all heads. Useful for init.

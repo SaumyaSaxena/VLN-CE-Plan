@@ -67,6 +67,10 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
             device=device
         )
     
+    def get_trainable_parameters(self):
+        params = self.module.get_trainable_parameters()
+        return params
+
     def sample_actions(
         self,
         observations,

@@ -153,7 +153,6 @@ def discrete_loss(
         "accuracy": accuracy,
     }
 
-
 # class ContinuousActionHead(nn.Module, ActionHead):
 #     """Predicts continuous actions (as opposed to discretized).
 
@@ -488,6 +487,9 @@ class DiffusionActionHead(nn.Module):
             device=device,
         )
 
+    def get_trainable_parameters(self):
+        return self.diffusion_model.get_trainable_parameters()
+    
     def forward(
         self,
         transformer_outputs: Dict[str, TokenGroup],

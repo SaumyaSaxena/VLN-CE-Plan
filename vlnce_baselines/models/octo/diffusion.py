@@ -31,6 +31,14 @@ class ScoreActor(nn.Module):
         self.cond_encoder = cond_encoder
         self.reverse_network = reverse_network
 
+    def get_trainable_parameters(self):
+        return (
+            list(self.time_preprocess.parameters()) + \
+            self.cond_encoder.get_trainable_parameters() + \
+            list(self.reverse_network.parameters())
+        )
+
+
     def forward(self, obs_enc, actions, time, train=False):
         t_ff = self.time_preprocess(time)
         cond_enc = self.cond_encoder(t_ff, train=train)
@@ -100,6 +108,9 @@ class MLP(nn.Module):
                     self.layer_norms.append(nn.LayerNorm(_input_dim).to(self.device))
             _input_dim = size
 
+    def get_trainable_parameters(self):
+        mlp_params = [param for layer in (self.dense_layers + self.dropout_layers + self.layer_norms) for param in layer.parameters()]
+        return mlp_params
 
     def forward(self, x: torch.Tensor, train: bool = False) -> torch.Tensor:
         

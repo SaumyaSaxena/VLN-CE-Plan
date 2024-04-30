@@ -21,3 +21,4 @@ tensorflow==2.13.1
 tensorflow_hub==0.15.0
 tensorflow_text==2.13.0
 openai==0.28
+timm==0.6.12

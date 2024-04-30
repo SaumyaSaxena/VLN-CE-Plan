@@ -1,9 +1,14 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping, Tuple, Optional
 
 from gym import spaces
 
+import torch
 import tensorflow as tf
 import tensorflow_hub as hub
+
+from heapq import heappush, heappop
+
+from timm.scheduler.scheduler_factory import create_scheduler
 
 def extract_instruction_tokens(
     observations: List[Dict],
@@ -94,7 +99,6 @@ def get_gemini_text_model():
 
 def get_blip2_model(device):
     from transformers import AutoProcessor, Blip2ForConditionalGeneration
-    import torch
     processor = AutoProcessor.from_pretrained("Salesforce/blip2-opt-2.7b")
     # by default `from_pretrained` loads the weights in float32
     # we load in float16 instead to save memory
@@ -118,3 +122,71 @@ def load_model():
     preprocess_model = make_bert_preprocess_model()
     encoder = hub.KerasLayer(f'{cwd}/../data/bert_models/bert_multi_cased_L-12_H-768_A-12_4/',trainable=True)
     return preprocess_model, encoder
+
+def create_optimizer_with_params(config, params):
+    optimizer = None
+    if config['name'] == 'Adam':
+        adam_params = config['Adam']
+        optimizer = torch.optim.Adam(params, lr=adam_params['lr'], eps=adam_params['eps'])
+    elif config['name'] == 'AdamW':
+        adamw_params = config[config['name']]
+        optimizer = torch.optim.AdamW(params, lr=adamw_params['lr'], 
+                                      eps=adamw_params['eps'],
+                                      weight_decay=adamw_params['weight_decay'])
+    else:
+        raise ValueError(f"Invalid optimizer: {config['name']}")
+    return optimizer
+
+def create_schedulder_with_params(config: Mapping[str, Any], optimizer) -> Tuple[Optional[Any], Mapping]:
+    scheduler = None
+    extra_dict = {}
+
+    # Get scheduler params config
+    scheduler_config = config[config['name']]
+    if scheduler_config['use_timm']: 
+        # Use timm scheduler
+        total_epochs = scheduler_config['epochs']
+        # Manually set the epochs correctly
+        cooldown_epochs = scheduler_config.get('cooldown_epochs', 0)
+        scheduler_config['epochs'] = total_epochs - cooldown_epochs
+        scheduler, num_epochs = create_scheduler(scheduler_config, optimizer)
+
+        assert num_epochs == total_epochs, (
+            f"timm scheduler epochs {num_epochs} and total epochs {total_epochs} do not match.")
+
+        extra_dict['num_epochs'] = num_epochs
+        # Update scheduler in epochs
+        extra_dict['t_in_epochs'] = True
+        extra_dict['timm_scheduler'] = True
+
+    elif config['name'] == 'CosineAnnealingLR':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=scheduler_config['t_max'], 
+            eta_min=scheduler_config['eta_min'], 
+            last_epoch=scheduler_config['last_epoch'])
+        extra_dict['t_in_epochs'] = False
+        extra_dict['timm_scheduler'] = False
+
+    else:
+        raise ValueError(f"Invalid optim schedulder: {config['name']}")
+    
+    return scheduler, extra_dict
+
+class TopKLogger:
+    def __init__(self, k: int):
+        self.max_to_keep = k
+        self.checkpoint_queue = []
+    
+    def push(self, ckpt: str, success: float):
+        # NOTE: We have a min heap
+        if len(self.checkpoint_queue) < self.max_to_keep:
+            heappush(self.checkpoint_queue, (success, ckpt))
+            return True
+        else:
+            curr_min_success, _ = self.checkpoint_queue[0]
+            if curr_min_success < success:
+                heappop(self.checkpoint_queue)
+                heappush(self.checkpoint_queue, (success, ckpt))
+                return True
+            else:
+                return False

@@ -15,8 +15,6 @@ window_size: 1
 num_inp_channels: 4 # RGBD input
 pred_horizon: 1
 
-
-
 viz_interval: 20000
 viz_kwargs:
   eval_batch_size: 128
@@ -133,6 +131,7 @@ model:
         obs_stack_keys:
         - image_primary
         task_stack_keys: []
+        finetune_encoder: true
       module: vlnce_baselines.models.octo.tokenizers
       name: ImageTokenizer
   readouts:
@@ -153,7 +152,7 @@ model:
     dropout_rate: 0.0
     mlp_dim: 1536
     num_attention_heads: 6
-    num_layers: 12
+    num_layers: 3 #12
     window_size: ${window_size}
     token_embedding_size: ${model.token_embedding_size}
 

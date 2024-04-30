@@ -2,7 +2,7 @@ BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_subtasks.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
 TORCH_GPU_ID: 2
-NUM_ENVIRONMENTS: 1 # Number of envs per GPU
+NUM_ENVIRONMENTS: 20 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en_subtasks
 CHECKPOINT_FOLDER: outputs/rxr_octo_en_subtasks
 CONTEXT_LEARNING: True
@@ -13,6 +13,9 @@ wandb:
   group: octo
   project: vlnce_plan
   name: discrete_loss
+  saver:
+    upload: True
+    save_top_k: 5
 wandb_resume_id: null
 
 EVAL:
@@ -71,7 +74,7 @@ RL:
           depth: (256, 256)
 
 IL:
-  batch_size: 1
+  batch_size: 4
   epochs: 15
   inflection_weight_coef: 1.9
   load_from_ckpt: False
@@ -83,3 +86,36 @@ IL:
     trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories_subtasks_merged.json.gz
     max_traj_len: 250  # 1.3% of episodes in the English training split are above 250
     logger_type: 'wandb' # 'wandb', 'tb'
+
+train:
+  optimizer:
+    name: AdamW
+    Adam:
+      lr: 2.5e-4
+      eps: 1.0e-8
+    AdamW:
+      lr: 2.5e-4
+      eps: 1.0e-8
+      weight_decay: 0.01
+
+  # Scheduler config
+  scheduler:
+    use: False
+    name: timm_cosine
+    CosineAnnealingLR:
+      eta_min: 0.00001
+      t_max: -1
+      last_epoch: -1    # No warm restarts (simply follows cosine decay)
+    timm_cosine:
+      use_timm: True
+      sched: cosine
+      # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
+      epochs: ${IL.epochs}  # Total epochs to run (warmup + decay + cooldown)
+      min_lr: 1.0e-5         # k
+      warmup_lr: 1.0e-6
+      warmup_epochs: 10
+      cooldown_epochs: 5
+
+  grad_clip:
+    use: True
+    norm: 1.0

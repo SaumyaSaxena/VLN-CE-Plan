@@ -141,6 +141,9 @@ class BlockTransformer(nn.Module):
         self.transformer = Transformer(**transformer_kwargs, device=device)
         self.device = device
 
+    def get_trainable_parameters(self):
+        return self.transformer.get_trainable_parameters()
+    
     def forward(
         self,
         prefix_groups: Sequence[PrefixGroup],

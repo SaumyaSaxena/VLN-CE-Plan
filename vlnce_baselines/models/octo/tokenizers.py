@@ -92,6 +92,7 @@ class ImageTokenizer(nn.Module):
         task_stack_keys: Sequence[str] = tuple(),
         task_film_keys: Sequence[str] = tuple(),
         proper_pad_mask: bool = True,
+        finetune_encoder: bool = True,
         device: str = 'cuda',
     ):
         super().__init__()
@@ -102,10 +103,21 @@ class ImageTokenizer(nn.Module):
         self.task_stack_keys = task_stack_keys
         self.task_film_keys = task_film_keys
         self.proper_pad_mask = proper_pad_mask
+        self.finetune_encoder = finetune_encoder
         self.device = device
 
         self.encoder_def = ModuleSpec.instantiate(encoder, device)()
+
+        if not self.finetune_encoder:
+            for p in self.encoder_def.parameters():
+                p.requires_grad_(False)
     
+    def get_trainable_parameters(self):
+        if self.finetune_encoder:
+            return self.encoder_def.get_trainable_parameters()
+        else:
+            return []
+
     def forward(
         self,
         observations,
@@ -164,7 +176,12 @@ class ImageTokenizer(nn.Module):
             )
 
         # run visual encoder
-        image_tokens = self.encoder_def(enc_inputs.permute(0,3,1,2), **encoder_input_kwargs) # TODO(saumya): permute to change to (b,c,h,w) format. Check!
+        if not self.finetune_encoder:
+            with torch.no_grad():
+                image_tokens = self.encoder_def(enc_inputs.permute(0,3,1,2), **encoder_input_kwargs) # TODO(saumya): permute to change to (b,c,h,w) format. Check!
+        else:
+            image_tokens = self.encoder_def(enc_inputs.permute(0,3,1,2), **encoder_input_kwargs) # TODO(saumya): permute to change to (b,c,h,w) format. Check!
+        
         image_tokens = image_tokens.permute(0,2,3,1) # TODO(saumya): permute to change back to (b,h,w,c) format. Check!
         image_tokens = torch.reshape(image_tokens, (b, t, -1, image_tokens.shape[-1]))
 
@@ -194,10 +211,6 @@ class LanguageTokenizer(nn.Module):
          finetune_encoder (bool, optional): Optional finetune last layers of the language model.
     """
 
-    encoder: str = None
-    finetune_encoder: bool = False
-    proper_pad_mask: bool = True
-
     def __init__(self,
         encoder: str = None,
         finetune_encoder: bool = False,
@@ -210,6 +223,7 @@ class LanguageTokenizer(nn.Module):
         self.proper_pad_mask = proper_pad_mask
         self.device = device
 
+        
         if encoder is not None:
             from transformers import AutoConfig, AutoModelForSeq2SeqLM, T5ForConditionalGeneration
 
@@ -219,6 +233,16 @@ class LanguageTokenizer(nn.Module):
                 self.hf_model = T5ForConditionalGeneration.from_pretrained(self.encoder).to(self.device)
             else:
                 self.hf_model = AutoModelForSeq2SeqLM.from_pretrained(self.encoder).to(self.device)
+
+            if not self.finetune_encoder:
+                for p in self.hf_model.parameters():
+                    p.requires_grad_(False)
+    
+    def get_trainable_parameters(self):
+        if self.finetune_encoder:
+            return list(self.hf_model.parameters())
+        else:
+            return []
 
     def forward(
         self,

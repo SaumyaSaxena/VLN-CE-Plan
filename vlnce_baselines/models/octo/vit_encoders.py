@@ -173,6 +173,14 @@ class SmallStem(nn.Module):
 
         if use_film:
             self.film_conditioning = FilmConditioning()
+        
+    def get_trainable_parameters(self):
+        params = [param for layer in (
+            self.std_convs + self.group_norms + [self.conv]
+        ) for param in layer.parameters()]
+        if self.use_film:
+            params.extend(list(self.film_conditioning.parameters()))
+        return params
 
     def forward(self, observations: torch.Tensor, train: bool = True, cond_var=None):
         expecting_cond_var = self.use_film

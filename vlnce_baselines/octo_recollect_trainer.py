@@ -28,6 +28,8 @@ from vlnce_baselines.recollect_trainer import RecollectTrainer
 from vlnce_baselines.common.recollection_dataset import (
     OctoTeacherRecollectionDataset,
 )
+from vlnce_baselines.common.utils import create_optimizer_with_params, create_schedulder_with_params
+from vlnce_baselines.common.utils import TopKLogger
 
 from vlnce_baselines.models.octo.octo_utils import get_octo_data
 from vlnce_baselines.models.octo_policy import OctoPolicy
@@ -145,25 +147,42 @@ class OctoRecollectTrainer(RecollectTrainer):
         if self.config.EVAL.SAVE_RESULTS:
             self._make_results_dir()
 
+    def get_current_learning_rate(self, epoch):
+        '''Get current learning rate for logging.'''
+        lr = None
+        if self.scheduler:
+            if self.scheduler_is_timm:
+                lr = self.scheduler.get_epoch_values(epoch)[0]
+            else:
+                lr = self.scheduler.get_last_lr()[0]
+        return lr
+
     def _initialize_policy(
         self,
         config: Config,
         load_from_ckpt: bool,
     ) -> None:
         
-        octo_config = OmegaConf.load(config['OCTO_CONFIG_PATH'])
-        example_batch, dataset_statistics = get_octo_data(octo_config.pretrained_ckpt_path)
-        self.policy = OctoPolicy.from_config(octo_config, example_batch, dataset_statistics, self.device)
+        self.octo_config = OmegaConf.load(config['OCTO_CONFIG_PATH'])
+        example_batch, dataset_statistics = get_octo_data(self.octo_config.pretrained_ckpt_path)
+        self.policy = OctoPolicy.from_config(self.octo_config, example_batch, dataset_statistics, self.device)
         self.policy.to(self.device)
+        # wandb.config.update(opt)
 
-        self.wandb_run = wandb.init(project=config.wandb.project, 
-                         entity=config.wandb.entity, 
-                         group=config.wandb.group,
-                         name=f'{config.wandb.name}')
+        self.optimizer = create_optimizer_with_params(config.train.optimizer, self.policy.get_trainable_parameters())
 
-        self.optimizer = torch.optim.Adam(
-            self.policy.parameters(), lr=self.config.IL.lr
-        )
+        # Create scheduler
+        if config.train.scheduler.use:
+            self.scheduler, scheduler_extra_dict = create_schedulder_with_params(config.train.scheduler, self.optimizer)
+            # If True update scheduler at epochs else after every step
+            self.scheduler_t_in_epochs = scheduler_extra_dict['t_in_epochs']
+            self.scheduler_is_timm = scheduler_extra_dict['timm_scheduler']
+        else:
+            self.scheduler = None
+
+        self.use_grad_clip = config.train.grad_clip.use
+        if self.use_grad_clip:
+            self.grad_clip_norm = config.train.grad_clip.norm
 
         if load_from_ckpt:
             ckpt_path = config.IL.ckpt_to_load
@@ -182,17 +201,32 @@ class OctoRecollectTrainer(RecollectTrainer):
         logger.info(f"Agent parameters: {params}. Trainable: {params_t}")
         logger.info("Finished setting up policy.")
 
-    def save_checkpoint(self, epoch: int, step_id: int, ckpt_save_dir) -> None:
-        torch.save(
-            obj={
-                "state_dict": self.policy.state_dict(),
-                "config": self.config,
-                "optim_state": self.optimizer.state_dict(),
-                "epoch": epoch,
-                "step_id": step_id,
-            },
-            f=os.path.join(ckpt_save_dir, f"ckpt.{epoch}.pth"),
-        )
+    def save_checkpoint(
+        self, 
+        epoch: int,
+        step_id: int,
+        ckpt_save_dir,
+        metric,
+        upload_to_wandb: bool,
+    ) -> None:
+
+        save_file_name = os.path.join(ckpt_save_dir, f'ckpt_epoch_{epoch}_step_{step_id}_action_loss_{metric:.3f}.pth')
+        
+        status = self.topk_logger.push(save_file_name, -1*metric)
+        if status:
+            torch.save(
+                obj={
+                    "state_dict": self.policy.state_dict(),
+                    "config": self.config,
+                    "octo_config": self.octo_config,
+                    "optim_state": self.optimizer.state_dict(),
+                    "epoch": epoch,
+                    "step_id": step_id,
+                },
+                f=save_file_name,
+            )
+            if upload_to_wandb:
+                wandb.save(save_file_name, base_path=os.path.join(ckpt_save_dir, '..'))
 
     def train(self) -> None:
         split = self.config.TASK_CONFIG.DATASET.SPLIT
@@ -209,12 +243,38 @@ class OctoRecollectTrainer(RecollectTrainer):
         self.config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.MAX_SCENE_REPEAT_STEPS = (
             -1
         )
+        self.config.train.scheduler.timm_cosine.epochs = self.config.IL.epochs # TODO: why is this not updating in cfg
         self.config.freeze()
+
+        current_time = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+        tb_dir = f'{self.config.TENSORBOARD_DIR}/{current_time}/tb_logs'
+        os.makedirs(tb_dir, exist_ok=False)
+        ckpt_save_dir = f'{self.config.CHECKPOINT_FOLDER}/{current_time}/checkpoints'
+        os.makedirs(ckpt_save_dir, exist_ok=False)
+        wandb_dir = f'{self.config.CHECKPOINT_FOLDER}/{current_time}/wandb'
+        os.makedirs(wandb_dir, exist_ok=False)
+
+        self.topk_logger = TopKLogger(self.config['wandb']['saver'].get('save_top_k', 5))
+
+        if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
+            self.wandb_run = wandb.init(project=self.config.wandb.project, 
+                            entity=self.config.wandb.entity, 
+                            group=self.config.wandb.group,
+                            name=f'{self.config.wandb.name}_{current_time}',
+                            dir=wandb_dir)
+
+        if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
+            tb_writer = TensorboardWriter(
+                tb_dir,
+                flush_secs=self.flush_secs,
+                purge_step=0,
+            )
 
         self._initialize_policy(
                 self.config,
                 self.config.IL.load_from_ckpt
             )
+        self.policy.train()
 
         dataset = OctoTeacherRecollectionDataset(self.policy, self.config)
         
@@ -230,7 +290,7 @@ class OctoRecollectTrainer(RecollectTrainer):
             )
         )
         
-        trainable_size = np.sum([np.prod(p.shape) for p in self.policy.parameters() if p.requires_grad])
+        trainable_size = np.sum([np.prod(p.shape) for p in self.policy.get_trainable_parameters() if p.requires_grad])
         all_params_size = np.sum([np.prod(p.shape) for p in self.policy.parameters()])
         print(f"all: {all_params_size}, trainable: {trainable_size}")
     
@@ -253,19 +313,6 @@ class OctoRecollectTrainer(RecollectTrainer):
                 " should be a multiple of batch_size."
             )
 
-        current_time = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
-        tb_dir = f'{self.config.TENSORBOARD_DIR}/{current_time}/tb_logs'
-        os.makedirs(tb_dir, exist_ok=False)
-        ckpt_save_dir = f'{self.config.CHECKPOINT_FOLDER}/{current_time}/checkpoints'
-        os.makedirs(ckpt_save_dir, exist_ok=False)
-
-        if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
-            tb_writer = TensorboardWriter(
-                tb_dir,
-                flush_secs=self.flush_secs,
-                purge_step=0,
-            )
-
         AuxLosses.activate()
         batches_per_epoch = dataset.length // dataset.batch_size
 
@@ -281,12 +328,18 @@ class OctoRecollectTrainer(RecollectTrainer):
                 else range(batches_per_epoch)
             )
 
+            epoch_logs = {}
+            epoch_logs['loss'] = []
+            epoch_logs['optim/lr'] = []
+            epoch_logs['start_train_step'] = self.step_id
+
+            # self.save_checkpoint(epoch, self.step_id, ckpt_save_dir, 0, self.config.wandb.saver.upload)
+
             for batch_idx in t:
                 batch_time = time.time()
                 batch_str = f"{batch_idx + 1}/{batches_per_epoch}"
 
                 batch = next(diter)
-
                 for k, v in batch["observation"].items():
                     if "pad_mask_dict" not in k:
                         batch["observation"][k] = v.to(device=self.device, non_blocking=True)
@@ -322,7 +375,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                     loss_accumulation_scalar = 1
                     step_grad = True
 
-                action_loss, action_metrics = self._update_agent(
+                action_loss, loss_dict = self._update_agent(
                     batch,
                     step_grad=step_grad,
                     loss_accumulation_scalar=loss_accumulation_scalar,
@@ -345,25 +398,44 @@ class OctoRecollectTrainer(RecollectTrainer):
                         + f" [Loss: {round(action_loss, 4)}]"
                         # + aux_s
                     )
+
                 if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
                     # tb_writer.add_scalar("loss", loss, self.step_id)
                     tb_writer.add_scalar("action_loss", action_loss, self.step_id)
                     # tb_writer.add_scalar("aux_loss", aux_loss, self.step_id)
                 
                 if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
-                    # wandb.log({"loss": loss}, step=self.step_id)
-                    wandb.log({"action_loss": action_loss}, step=self.step_id)
-                    wandb.log({"mse_loss": action_metrics['mse']}, step=self.step_id)
-                    wandb.log({"accuracy": action_metrics['accuracy']}, step=self.step_id)
-                    # wandb.log({"aux_loss": loss}, step=self.step_id)
-                    wandb.log({"epoch": epoch}, step=self.step_id)
+                    optim_logs = {'epoch': epoch}
+                    if self.scheduler:
+                        optim_logs['optim/lr'] = self.get_current_learning_rate(epoch)
+
+                    log_dict = {'train_loss': action_loss}
+                    log_dict.update(loss_dict)
+                    log_dict.update(optim_logs)
+                    wandb.log(log_dict, step=self.step_id)
+
+                epoch_logs['loss'].append(action_loss)
+                for k, v in loss_dict.items():
+                    if epoch_logs.get(k) is None:
+                        epoch_logs[k] = []
+                    epoch_logs[k].append(v)
+                if self.scheduler is not None:
+                    epoch_logs['optim/lr'].append(self.get_current_learning_rate(epoch))
 
                 self.step_id += 1  # noqa: SIM113
-
-            self.save_checkpoint(epoch, self.step_id, ckpt_save_dir)
+            
+            # Saving/updates at epoch level
+            if self.scheduler and self.scheduler_t_in_epochs:
+                self.scheduler.step(epoch)
+            epoch_logs['end_train_step'] = self.step_id
+            metric = sum(epoch_logs['loss'])/len(epoch_logs['loss'])
+            self.save_checkpoint(epoch, self.step_id, ckpt_save_dir, metric, self.config.wandb.saver.upload)
 
         AuxLosses.deactivate()
         dataset.close_sims()
+        if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
+            tb_writer.exit()
+
 
     def _update_agent(self, 
         batch,
@@ -375,7 +447,7 @@ class OctoRecollectTrainer(RecollectTrainer):
             batch["task"],
             batch["observation"]["pad_mask"]
         )
-        action_loss, action_metrics = self.policy.module.heads["action"].loss(
+        action_loss, loss_dict = self.policy.module.heads["action"].loss(
             transformer_embeddings,  # Action head knows to pull out the action readout_key
             batch["action"],
             pad_mask=batch["observation"]["pad_mask"]
@@ -390,9 +462,17 @@ class OctoRecollectTrainer(RecollectTrainer):
         action_loss.backward()
 
         if step_grad:
+            if self.use_grad_clip:
+                torch.nn.utils.clip_grad_norm_(
+                    self.policy.get_trainable_parameters(), 
+                    self.grad_clip_norm)
             self.optimizer.step()
+
+            if self.scheduler and not self.scheduler_t_in_epochs:
+                self.scheduler.step()
+
             self.optimizer.zero_grad()
 
         # if isinstance(aux_loss, torch.Tensor):
         #     aux_loss = aux_loss.item()
-        return action_loss.item(), action_metrics
+        return action_loss.item(), loss_dict
