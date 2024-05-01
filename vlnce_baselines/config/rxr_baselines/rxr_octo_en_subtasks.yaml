@@ -2,7 +2,7 @@ BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_subtasks.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
 TORCH_GPU_ID: 2
-NUM_ENVIRONMENTS: 20 # Number of envs per GPU
+NUM_ENVIRONMENTS: 5 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en_subtasks
 CHECKPOINT_FOLDER: outputs/rxr_octo_en_subtasks
 CONTEXT_LEARNING: True

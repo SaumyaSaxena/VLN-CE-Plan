@@ -153,6 +153,55 @@ def discrete_loss(
         "accuracy": accuracy,
     }
 
+def softmax_cross_entropy_loss(
+    logits,
+    ground_truth_value,
+    mask,
+):
+    """
+    Args:
+        logits: shape (batch_dims..., vocab_size)
+        ground_truth_value: continuous values in w/ shape (batch_dims...)
+        mask: broadcastable to ground_truth_value
+    """
+    labels = torch.argmax(ground_truth_value, axis=-1)
+    # labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
+
+    cross_ent_loss = torch.nn.CrossEntropyLoss(reduction='none')
+
+    logits_flat = rearrange(
+        logits,
+        "b w a -> (b w) a"
+    )
+
+    labels_flat = rearrange(
+        labels,
+        "b w -> (b w)"
+    )
+
+    loss = cross_ent_loss(logits_flat, labels_flat) 
+    loss = rearrange(
+        loss,
+        "(b w) -> b w",
+        b = labels.shape[0],
+        w = labels.shape[1]
+    )
+
+    loss = masked_mean(loss, mask)
+
+    # compute accuracy between predicted actions and target actions
+    pred_label = torch.argmax(logits, axis=-1)
+    accuracy = pred_label == labels
+    accuracy = masked_mean(accuracy, mask)
+
+    mse = torch.square(logits - ground_truth_value)
+    mse = masked_mean(mse, mask[..., None])
+    return loss, {
+        "cross_ent_loss": loss,
+        "mse": mse,
+        "accuracy": accuracy,
+    }
+
 # class ContinuousActionHead(nn.Module, ActionHead):
 #     """Predicts continuous actions (as opposed to discretized).
 
@@ -563,12 +612,19 @@ class DiffusionActionHead(nn.Module):
         #     pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
         # )
 
-        loss, metrics = discrete_loss(
-            self.action_tokenizer,
+        # loss, metrics = discrete_loss(
+        #     self.action_tokenizer,
+        #     pred_eps,
+        #     noise,
+        #     pad_mask[:, :, None],
+        # )
+
+        loss, metrics = softmax_cross_entropy_loss(
             pred_eps,
             noise,
-            pad_mask[:, :, None],
+            pad_mask,
         )
+
         # Sum over action dimension instead of averaging
         loss = loss * self.action_dim
         metrics["loss"] = metrics["loss"] * self.action_dim

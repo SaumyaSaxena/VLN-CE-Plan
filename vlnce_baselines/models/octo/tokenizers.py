@@ -335,6 +335,7 @@ class BinTokenizer(nn.Module):
         token_one_hot = (inputs < self.thresholds[1:]) & (
             inputs >= self.thresholds[:-1]
         ).type(torch.uint8)
+
         output_tokens = torch.argmax(token_one_hot, axis=-1)
         return output_tokens
 
