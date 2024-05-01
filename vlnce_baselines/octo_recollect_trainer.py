@@ -286,7 +286,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 collate_fn=collate_fn,
                 pin_memory=False,
                 drop_last=True,
-                num_workers=1,
+                num_workers=16,
             )
         )
         

@@ -627,7 +627,7 @@ class DiffusionActionHead(nn.Module):
 
         # Sum over action dimension instead of averaging
         loss = loss * self.action_dim
-        metrics["loss"] = metrics["loss"] * self.action_dim
+        metrics["cross_ent_loss"] = metrics["cross_ent_loss"] * self.action_dim
         metrics["mse"] = metrics["mse"] * self.action_dim
         return loss, metrics
 
