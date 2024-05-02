@@ -37,6 +37,7 @@ from vlnce_baselines.models.octo_policy import OctoPolicy
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     # import tensorflow as tf  # noqa: F401
+from accelerate import Accelerator
 
 from omegaconf import OmegaConf
 
@@ -135,6 +136,8 @@ class OctoRecollectTrainer(RecollectTrainer):
 
     def __init__(self, config=None):
         super().__init__(config)
+        self.accelerator = Accelerator()
+        self.device = self.accelerator.device
 
     def _make_dirs(self) -> None:
         self._make_ckpt_dir()
@@ -194,11 +197,6 @@ class OctoRecollectTrainer(RecollectTrainer):
                 self.step_id = ckpt_dict["step_id"]
             logger.info(f"Loaded weights from checkpoint: {ckpt_path}")
 
-        params = sum(param.numel() for param in self.policy.parameters())
-        params_t = sum(
-            p.numel() for p in self.policy.parameters() if p.requires_grad
-        )
-        logger.info(f"Agent parameters: {params}. Trainable: {params_t}")
         logger.info("Finished setting up policy.")
 
     def save_checkpoint(
@@ -229,6 +227,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 wandb.save(save_file_name, base_path=os.path.join(ckpt_save_dir, '..'))
 
     def train(self) -> None:
+
         split = self.config.TASK_CONFIG.DATASET.SPLIT
         self.config.defrost()
         self.config.TASK_CONFIG.TASK.NDTW.SPLIT = split
@@ -248,52 +247,36 @@ class OctoRecollectTrainer(RecollectTrainer):
 
         current_time = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
         tb_dir = f'{self.config.TENSORBOARD_DIR}/{current_time}/tb_logs'
-        os.makedirs(tb_dir, exist_ok=False)
+        os.makedirs(tb_dir, exist_ok=True)
         ckpt_save_dir = f'{self.config.CHECKPOINT_FOLDER}/{current_time}/checkpoints'
-        os.makedirs(ckpt_save_dir, exist_ok=False)
+        os.makedirs(ckpt_save_dir, exist_ok=True)
         wandb_dir = f'{self.config.CHECKPOINT_FOLDER}/{current_time}/wandb'
-        os.makedirs(wandb_dir, exist_ok=False)
-
+        os.makedirs(wandb_dir, exist_ok=True)
         self.topk_logger = TopKLogger(self.config['wandb']['saver'].get('save_top_k', 5))
 
-        if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
-            self.wandb_run = wandb.init(project=self.config.wandb.project, 
-                            entity=self.config.wandb.entity, 
-                            group=self.config.wandb.group,
-                            name=f'{self.config.wandb.name}_{current_time}',
-                            dir=wandb_dir)
+        if self.accelerator.is_local_main_process:
+            if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
+                self.wandb_run = wandb.init(project=self.config.wandb.project, 
+                                entity=self.config.wandb.entity, 
+                                group=self.config.wandb.group,
+                                name=f'{self.config.wandb.name}_{current_time}',
+                                dir=wandb_dir)
 
-        if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
-            tb_writer = TensorboardWriter(
-                tb_dir,
-                flush_secs=self.flush_secs,
-                purge_step=0,
-            )
+            if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
+                tb_writer = TensorboardWriter(
+                    tb_dir,
+                    flush_secs=self.flush_secs,
+                    purge_step=0,
+                )
 
         self._initialize_policy(
                 self.config,
                 self.config.IL.load_from_ckpt
             )
         self.policy.train()
-
-        dataset = OctoTeacherRecollectionDataset(self.policy, self.config)
-        
-        diter = iter(
-            torch.utils.data.DataLoader(
-                dataset,
-                batch_size=dataset.batch_size,
-                shuffle=False,
-                collate_fn=collate_fn,
-                pin_memory=False,
-                drop_last=True,
-                num_workers=16,
-            )
-        )
-        
         trainable_size = np.sum([np.prod(p.shape) for p in self.policy.get_trainable_parameters() if p.requires_grad])
         all_params_size = np.sum([np.prod(p.shape) for p in self.policy.parameters()])
         print(f"all: {all_params_size}, trainable: {trainable_size}")
-    
         if trainable_size > 1e9:
             print(f'{float(trainable_size) / 1e9:.2f} G ({trainable_size})')
         elif trainable_size > 1e6:
@@ -302,6 +285,21 @@ class OctoRecollectTrainer(RecollectTrainer):
             print(f'{float(trainable_size) / 1e3:.2f} K ({trainable_size})')
         else:
             print(f'{float(trainable_size):.2f}')
+
+        dataset = OctoTeacherRecollectionDataset(self.policy, self.config)
+        dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=dataset.batch_size,
+                shuffle=False,
+                collate_fn=collate_fn,
+                pin_memory=False,
+                drop_last=True,
+                num_workers=1,
+            )
+            
+        self.policy, self.optimizer, dataloader = self.accelerator.prepare(self.policy, self.optimizer, dataloader)
+        
+        diter = iter(dataloader)
 
         if self.config.IL.OCTO_TRAINER.effective_batch_size > 0:
             assert (
@@ -459,7 +457,9 @@ class OctoRecollectTrainer(RecollectTrainer):
 
         # loss = action_loss + aux_loss
         # loss = loss / loss_accumulation_scalar
-        action_loss.backward()
+
+        # action_loss.backward()
+        self.accelerator.backward(action_loss)
 
         if step_grad:
             if self.use_grad_clip:

@@ -285,11 +285,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
         config.TASK_CONFIG.MEASUREMENTS = []
         config.freeze()
 
-        self.envs = construct_envs(
-            config,
-            get_env_class(config.ENV_NAME),
-            episodes_allowed=list(self.trajectories.keys()),
-        )
+        self.envs = construct_envs(config,get_env_class(config.ENV_NAME),episodes_allowed=list(self.trajectories.keys()))
         self.length = sum(self.envs.number_of_episodes)
         self.obs_transforms = get_active_obs_transforms(self.config)
         self._observation_space = apply_obs_transforms_obs_space(

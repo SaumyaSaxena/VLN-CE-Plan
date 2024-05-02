@@ -167,7 +167,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                         corrected_actions_batch, # (max_traj_len_per_batch, bs)
                         weights_batch, # (max_traj_len_per_batch, bs)
                     ) = next(diter)
-                    import ipdb; ipdb.set_trace()
+
                     observations_batch = apply_obs_transforms_batch(
                         {
                             k: v.to(device=self.device, non_blocking=True)
