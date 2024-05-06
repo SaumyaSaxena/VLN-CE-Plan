@@ -31,14 +31,6 @@ class ScoreActor(nn.Module):
         self.cond_encoder = cond_encoder
         self.reverse_network = reverse_network
 
-    def get_trainable_parameters(self):
-        return (
-            list(self.time_preprocess.parameters()) + \
-            self.cond_encoder.get_trainable_parameters() + \
-            list(self.reverse_network.parameters())
-        )
-
-
     def forward(self, obs_enc, actions, time, train=False):
         t_ff = self.time_preprocess(time)
         cond_enc = self.cond_encoder(t_ff, train=train)
@@ -54,7 +46,7 @@ class FourierFeatures(nn.Module):
         self.learnable = learnable
         self.device = device
 
-        self.w = nn.Embedding(output_size // 2, input_dim).to(self.device) # input_dim=1 for time
+        self.w = nn.Embedding(output_size // 2, input_dim) # input_dim=1 for time
     
     def reset_parameters(self):
         nn.init.normal_(self.w.weight, std=0.2)
@@ -88,29 +80,25 @@ class MLP(nn.Module):
         self.dropout_rate = dropout_rate
         self.device = device
 
-        self.dense_layers = []
-        self.dropout_layers = []
-        self.layer_norms = []
+        self.dense_layers = nn.ModuleList()
+        self.dropout_layers = nn.ModuleList()
+        self.layer_norms = nn.ModuleList()
         _input_dim = input_dim
         for i, size in enumerate(self.hidden_dims):
             self.dense_layers.append(nn.Linear(
                         in_features=_input_dim,
                         out_features=size
-                ).to(self.device)
+                )
             )
             
             if i + 1 < len(hidden_dims) or activate_final:
                 if dropout_rate is not None and dropout_rate > 0:
                     self.dropout_layers.append(
-                        nn.Dropout(dropout_rate).to(self.device)
+                        nn.Dropout(dropout_rate)
                     )
                 if use_layer_norm:
-                    self.layer_norms.append(nn.LayerNorm(_input_dim).to(self.device))
+                    self.layer_norms.append(nn.LayerNorm(_input_dim))
             _input_dim = size
-
-    def get_trainable_parameters(self):
-        mlp_params = [param for layer in (self.dense_layers + self.dropout_layers + self.layer_norms) for param in layer.parameters()]
-        return mlp_params
 
     def forward(self, x: torch.Tensor, train: bool = False) -> torch.Tensor:
         
@@ -140,21 +128,21 @@ class MLPResNetBlock(nn.Module):
         self.dropout_rate = dropout_rate
         self.device = device
 
-        self.dropout = nn.Dropout(dropout_rate).to(self.device)
-        self.layer_norm = nn.LayerNorm(features).to(self.device)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.layer_norm = nn.LayerNorm(features)
         self.dense_layer1 = nn.Linear(
             in_features=features,
             out_features=features * 4
-        ).to(self.device)
+        )
         self.dense_layer2 = nn.Linear(
             in_features=features * 4,
             out_features=features
-        ).to(self.device)
+        )
 
         self.dense_layer3 = nn.Linear(
             in_features=features,
             out_features=features
-        ).to(self.device)
+        )
 
     def forward(self, x, train: bool = False):
         residual = x
@@ -191,7 +179,7 @@ class MLPResNet(nn.Module):
         self.dense_layer1 = nn.Linear(
             in_features=inp_dim,
             out_features=hidden_dim
-        ).to(self.device)
+        )
 
         self.mlp_resnet_block = MLPResNetBlock(
             hidden_dim,
@@ -204,7 +192,7 @@ class MLPResNet(nn.Module):
         self.dense_layer2 = nn.Linear(
             in_features=hidden_dim,
             out_features=out_dim
-        ).to(self.device)
+        )
 
     def forward(self, x: torch.Tensor, train: bool = False) -> torch.Tensor:
         x = self.dense_layer1(x)

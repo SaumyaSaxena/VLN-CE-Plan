@@ -22,6 +22,7 @@ viz_kwargs:
   trajs_for_metrics: 100
   trajs_for_viz: 8
 
+bert_max_tokens: 16
 text_processor:
   args: []
   kwargs:
@@ -131,7 +132,7 @@ model:
         obs_stack_keys:
         - image_primary
         task_stack_keys: []
-        finetune_encoder: true
+        finetune_encoder: True
       module: vlnce_baselines.models.octo.tokenizers
       name: ImageTokenizer
   readouts:
@@ -140,7 +141,7 @@ model:
     language:
       args: []
       kwargs:
-        encoder: t5-base
+        encoder: bert # t5-base, bert
         finetune_encoder: false
       module: vlnce_baselines.models.octo.tokenizers
       name: LanguageTokenizer
@@ -150,8 +151,8 @@ model:
     add_position_embedding: false
     attention_dropout_rate: 0.0
     dropout_rate: 0.0
-    mlp_dim: 1536
-    num_attention_heads: 6
+    mlp_dim: 768 # 1536
+    num_attention_heads: 3 #6
     num_layers: 3 #12
     window_size: ${window_size}
     token_embedding_size: ${model.token_embedding_size}

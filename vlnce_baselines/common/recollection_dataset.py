@@ -5,6 +5,8 @@ from collections import defaultdict, deque
 import numpy as np
 import torch
 import tqdm
+import time
+
 from gym import Space
 from habitat.config.default import Config
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
@@ -275,9 +277,9 @@ class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
         return self
 
 class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
-    def __init__(self, policy, config: Config):
+    def __init__(self, config: Config, octo_config):
         super().__init__(config)
-        self.policy = policy
+        self.octo_config = octo_config
 
     def initialize_sims(self):
         config = self.config.clone()
@@ -303,13 +305,24 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
             observations,
             self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
         )
+
+        self.one_hot_actions = {} 
+        for ep_id in self.trajectories.keys():
+            trajectory = np.array(self.trajectories[ep_id])
+            one_hot_trajectory = np.zeros((trajectory.shape[0],6), dtype=np.float32)
+            one_hot_trajectory[np.arange(trajectory.shape[0]), trajectory[:,1]] = 1
+            self.one_hot_actions[ep_id] = one_hot_trajectory
+
+
         for i, ep in enumerate(self.envs.current_episodes()):
             path_step = self.trajectories[ep.episode_id][0]
+            
             self._env_observations[i].append(
                 (
                     observations[i],
                     path_step[0],  # prev_action
                     path_step[2],  # oracle_action
+                    self.one_hot_actions[ep.episode_id][0],  # oracle_action
                     ep.instruction.instruction_text
                 )
             )
@@ -357,6 +370,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
                             [o[1] for o in self._env_observations[i]],
                             [o[2] for o in self._env_observations[i]],
                             [o[3] for o in self._env_observations[i]],
+                            [o[4] for o in self._env_observations[i]],
                         )
                     )
                     self._env_observations[i] = []
@@ -365,11 +379,14 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
                 path_step = self.trajectories[current_episodes[i].episode_id][
                     self.env_step[i]
                 ]
+                one_hot_action = np.zeros(6)
+                one_hot_action[path_step[2]] = 1
                 self._env_observations[i].append(
                     (
                         observations[i],
                         path_step[0],  # prev_action
                         path_step[2],  # oracle_action
+                        self.one_hot_actions[current_episodes[i].episode_id][self.env_step[i]],
                         current_episodes[i].instruction.instruction_text
                     )
                 )
@@ -385,7 +402,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
         size of 5. For this reason, we probably don't need to use extra workers.
         """
         x = self._load_next()
-        obs, prev_actions, oracle_actions, instructions = x
+        obs, prev_actions, oracle_actions, one_hot_action, instructions = x
 
         # transpose obs
         obs_t = defaultdict(list)
@@ -398,10 +415,13 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
         for k, v in obs_t.items():
             obs_t[k] = torch.from_numpy(np.copy(v))
 
-        obs_t = apply_obs_transforms_batch(obs_t, self.obs_transforms)
+        obs_t['rxr_instruction'] = obs_t['rxr_instruction'][:,:self.octo_config.bert_max_tokens,:]
+        
+        # obs_t = apply_obs_transforms_batch(obs_t, self.obs_transforms)
 
         prev_actions = torch.from_numpy(np.copy(prev_actions))
         oracle_actions = torch.from_numpy(np.copy(oracle_actions))
+        one_hot_action = torch.from_numpy(np.copy(one_hot_action))
 
         inflections = torch.cat(
             [
@@ -409,12 +429,12 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
                 (oracle_actions[1:] != oracle_actions[:-1]).long(),
             ]
         )
-        
-        tasks = self.policy.create_tasks(texts=instructions)
+
         return (
             obs_t,
             prev_actions,
             oracle_actions,
+            one_hot_action,
             self.inflec_weights[inflections],
-            tasks,
+            instructions,
         )

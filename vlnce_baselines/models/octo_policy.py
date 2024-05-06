@@ -27,7 +27,7 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         device: str = 'cuda'
     ):
         super().__init__()
-        self.module = module.to(device)
+        self.module = module
         self.seed = seed
         self.text_processor = text_processor
         self.config = config
@@ -54,8 +54,14 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
             rng (Optional[PRNGKey], optional): RNG key for initializing the model.
             dataset_statistics (Optional[Dict[str, Any]], optional): Dataset statistics.
         """
+        
+        if "bert" in config.model.task_tokenizers.language.kwargs.encoder:
+            text_processor = None
+            config.model.max_tokens = config.bert_max_tokens
+        else:
+            text_processor = ModuleSpec.instantiate(config["text_processor"], device)()
+        
         module = OctoModule.create(**config["model"], device=device)
-        text_processor = ModuleSpec.instantiate(config["text_processor"], device)()
 
         return cls(
             module=module,
@@ -68,7 +74,7 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         )
     
     def get_trainable_parameters(self):
-        params = self.module.get_trainable_parameters()
+        params = [p for p in self.parameters() if p.requires_grad]
         return params
 
     def sample_actions(
@@ -140,7 +146,7 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
             )
 
         if texts is not None:
-            assert self.text_processor is not None
+            # assert self.text_processor is not None
             tasks["language_instruction"] = texts
             tasks["pad_mask_dict"]["language_instruction"] = torch.ones(
                 len(texts), dtype=bool

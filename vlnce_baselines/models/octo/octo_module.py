@@ -71,7 +71,9 @@ class OctoTransformer(nn.Module):
             horizon lengths smaller or equal to the pre-training horizon.
     """
     def __init__(self,
+        observation_tokenizers_names,
         observation_tokenizers: Dict[str, nn.Module],
+        task_tokenizers_names,
         task_tokenizers: Dict[str, nn.Module],
         readouts: Dict[str, int],
         transformer_kwargs: Dict,
@@ -81,7 +83,9 @@ class OctoTransformer(nn.Module):
         device: str,
     ):
         super().__init__()
+        self.observation_tokenizers_names = observation_tokenizers_names
         self.observation_tokenizers = observation_tokenizers
+        self.task_tokenizers_names = task_tokenizers_names
         self.task_tokenizers = task_tokenizers
         self.readouts = readouts
         self.transformer_kwargs = transformer_kwargs
@@ -90,33 +94,33 @@ class OctoTransformer(nn.Module):
         self.max_tokens = max_tokens
         self.device = device
 
-        self.task_dense_layers = []
-        self.task_pos_emb = []
-        for _, tok in self.task_tokenizers.items():
+        self.task_dense_layers = nn.ModuleList()
+        self.task_pos_emb = nn.ModuleList()
+        for tok in self.task_tokenizers:
             self.task_dense_layers.append(
                 nn.Linear(
                     in_features=tok.hidden_dim,
                     out_features=token_embedding_size
-                ).to(self.device)
+                )
             )
-            self.task_pos_emb.append(nn.Embedding(max_tokens, token_embedding_size).to(self.device))
+            self.task_pos_emb.append(nn.Embedding(max_tokens, token_embedding_size))
 
-        self.observation_dense_layers = []
-        self.observation_pos_emb = []
-        for _, tok in self.observation_tokenizers.items():
+        self.observation_dense_layers = nn.ModuleList()
+        self.observation_pos_emb = nn.ModuleList()
+        for tok in self.observation_tokenizers:
             self.observation_dense_layers.append(
                 nn.Linear(
                     in_features=tok.encoder_def.num_features, 
                     out_features=token_embedding_size
-                ).to(self.device)
+                )
             )
             self.observation_pos_emb.append(
-                nn.Embedding(max_horizon*tok.num_tokens, token_embedding_size).to(self.device)
+                nn.Embedding(max_horizon*tok.num_tokens, token_embedding_size)
             ) # TODO(saumya): tok.num_tokens is only correct only for image size 256*256
 
-        self.readout_pos_emb = []
+        self.readout_pos_emb = nn.ModuleList()
         for _, n_tokens in self.readouts.items():
-            self.readout_pos_emb.append(nn.Embedding(max_horizon*n_tokens, token_embedding_size).to(self.device))
+            self.readout_pos_emb.append(nn.Embedding(max_horizon*n_tokens, token_embedding_size))
 
         self.block_transformer = BlockTransformer(transformer_kwargs, device = device)
         # self.reset_parameters()
@@ -124,27 +128,6 @@ class OctoTransformer(nn.Module):
     # def reset_parameters(self):
     #     nn.init.normal_(self.embedding1.weight)
     #     nn.init.normal_(self.embedding1.weight)
-    
-    def get_trainable_parameters(self):
-        task_tok_params = [
-            param 
-            for _, tok in self.task_tokenizers.items()
-            for param in tok.get_trainable_parameters()
-        ]
-        obs_tok_params = [
-            param
-            for _, tok in self.observation_tokenizers.items()
-            for param in tok.get_trainable_parameters()
-        ]
-
-        other_params = [param for layer in (
-            self.task_dense_layers + self.task_pos_emb + \
-            self.observation_dense_layers + self.observation_pos_emb + \
-            self.readout_pos_emb
-        ) for param in layer.parameters()]
-        
-        trans_params = self.block_transformer.get_trainable_parameters() # returns a list
-        return (task_tok_params + obs_tok_params + other_params + trans_params)
         
 
     def forward(
@@ -217,7 +200,7 @@ class OctoTransformer(nn.Module):
         #
         # First, add the task tokens
         #
-        for i, (name, tok) in enumerate(self.task_tokenizers.items()):
+        for i, (name, tok) in enumerate(zip(self.task_tokenizers_names, self.task_tokenizers)):
             group_name = f"task_{name}"
             # Receive inputs from tokenizer and cast to embedding size
             tokenizer_output: TokenGroup = tok(observations, tasks, train=train)
@@ -244,7 +227,7 @@ class OctoTransformer(nn.Module):
         #
         # Next, add the observation tokens
         #
-        for i , (name, tok) in enumerate(self.observation_tokenizers.items()):
+        for i , (name, tok) in enumerate(zip(self.observation_tokenizers_names, self.observation_tokenizers)):
             group_name = f"obs_{name}"
             # Receive inputs from tokenizer and cast to embedding size
             tokenizer_output: TokenGroup = tok(observations, tasks, train=train)
@@ -372,20 +355,13 @@ class OctoModule(nn.Module):
     def __init__(
         self,
         octo_transformer: OctoTransformer,
+        head_names,
         heads: Dict[str, nn.Module]
     ):
         super().__init__()
         self.octo_transformer = octo_transformer
+        self.head_names = head_names
         self.heads = heads
-
-    def get_trainable_parameters(self):
-        octo_transformer_params = self.octo_transformer.get_trainable_parameters()
-        head_params = [
-            param
-            for _, head in self.heads.items()
-            for param in head.get_trainable_parameters()
-        ]
-        return (octo_transformer_params + head_params)
 
     def forward(self, observations, tasks, pad_mask, train=True, verbose=False):
         """Run transformer and the main method for all heads. Useful for init.
@@ -407,7 +383,7 @@ class OctoModule(nn.Module):
             observations, tasks, pad_mask, train=train, verbose=verbose
         )
         head_outputs = {}
-        for head_name, head in self.heads.items():
+        for head_name, head in zip(self.head_names, self.heads):
             head_outputs[head_name] = head(transformer_outputs, train=train)
         return transformer_outputs, head_outputs
 
@@ -442,18 +418,20 @@ class OctoModule(nn.Module):
                 dropout_rate (float): dropout rate.
                 attention_dropout_rate (float): dropout rate in self attention.
         """
-        observation_tokenizer_defs = {
-            k: ModuleSpec.instantiate(spec, device)()
-            for k, spec in observation_tokenizers.items()
-        }
-        task_tokenizer_defs = {
-            k: ModuleSpec.instantiate(spec, device)() for k, spec in task_tokenizers.items()
-        }
 
-        head_defs = {k: ModuleSpec.instantiate(spec, device)() for k, spec in heads.items()}
+        observation_tokenizer_defs = nn.ModuleList([ModuleSpec.instantiate(spec, device)()
+            for k, spec in observation_tokenizers.items()])
+
+        task_tokenizer_defs = nn.ModuleList([ModuleSpec.instantiate(spec, device)()
+            for k, spec in task_tokenizers.items()])
+
+        head_defs = nn.ModuleList([ModuleSpec.instantiate(spec, device)()
+            for k, spec in heads.items()])
 
         model_def = OctoTransformer(
+            observation_tokenizers_names = observation_tokenizers.keys(),
             observation_tokenizers=observation_tokenizer_defs,
+            task_tokenizers_names=task_tokenizers.keys(),
             task_tokenizers=task_tokenizer_defs,
             readouts=readouts,
             token_embedding_size=token_embedding_size,
@@ -465,5 +443,6 @@ class OctoModule(nn.Module):
 
         return cls(
             octo_transformer=model_def,
+            head_names=heads.keys(),
             heads=head_defs,
         )

@@ -111,12 +111,6 @@ class ImageTokenizer(nn.Module):
         if not self.finetune_encoder:
             for p in self.encoder_def.parameters():
                 p.requires_grad_(False)
-    
-    def get_trainable_parameters(self):
-        if self.finetune_encoder:
-            return self.encoder_def.get_trainable_parameters()
-        else:
-            return []
 
     def forward(
         self,
@@ -225,59 +219,60 @@ class LanguageTokenizer(nn.Module):
 
         
         if encoder is not None:
-            from transformers import AutoConfig, AutoModelForSeq2SeqLM, T5ForConditionalGeneration
-
-            config = AutoConfig.from_pretrained(self.encoder)
-            self.hidden_dim = config.d_model
             if "t5" in self.encoder:
+                from transformers import AutoConfig, AutoModelForSeq2SeqLM, T5ForConditionalGeneration
+                config = AutoConfig.from_pretrained(self.encoder)
+                self.hidden_dim = config.d_model
                 self.hf_model = T5ForConditionalGeneration.from_pretrained(self.encoder).to(self.device)
+                # self.hf_model = AutoModelForSeq2SeqLM.from_pretrained(self.encoder).to(self.device)
+            elif "bert" in self.encoder:
+                self.hidden_dim = 768
             else:
-                self.hf_model = AutoModelForSeq2SeqLM.from_pretrained(self.encoder).to(self.device)
+                raise NotImplementedError(f"Tokenizer {self.encoder} not implemented")
 
             if not self.finetune_encoder:
-                for p in self.hf_model.parameters():
-                    p.requires_grad_(False)
+                if "t5" in self.encoder:
+                    for p in self.hf_model.parameters():
+                        p.requires_grad_(False)
     
-    def get_trainable_parameters(self):
-        if self.finetune_encoder:
-            return list(self.hf_model.parameters())
-        else:
-            return []
-
     def forward(
         self,
         observations,
         tasks=None,
         train: bool = True,
     ):
-        if "language_instruction" not in tasks:
-            logging.warning("No language inputs found. Skipping tokenizer entirely.")
-            assert self.proper_pad_mask, "Cannot skip unless using proper pad mask."
-            return None
-        if not isinstance(tasks["language_instruction"], torch.Tensor):
-            assert (
-                self.encoder is not None
-            ), "Received language tokens but no encoder specified."
-            bs = tasks["language_instruction"]['input_ids'].shape[0]
-            decoder_input_ids = torch.tensor([[0]]*bs).to(self.device)
+        if "t5" in self.encoder:
+            if "language_instruction" not in tasks:
+                logging.warning("No language inputs found. Skipping tokenizer entirely.")
+                assert self.proper_pad_mask, "Cannot skip unless using proper pad mask."
+                return None
+            if not isinstance(tasks["language_instruction"], torch.Tensor):
+                assert (
+                    self.encoder is not None
+                ), "Received language tokens but no encoder specified."
+                bs = tasks["language_instruction"]['input_ids'].shape[0]
+                decoder_input_ids = torch.tensor([[0]]*bs).to(self.device)
 
-            if not self.finetune_encoder:
-                with torch.no_grad():
+                if not self.finetune_encoder:
+                    with torch.no_grad():
+                        tokens = self.hf_model(
+                            input_ids=tasks["language_instruction"]['input_ids'].type(torch.long),
+                            attention_mask=tasks["language_instruction"]['attention_mask'], 
+                            decoder_input_ids=decoder_input_ids).encoder_last_hidden_state
+                else:
                     tokens = self.hf_model(
                         input_ids=tasks["language_instruction"]['input_ids'].type(torch.long),
                         attention_mask=tasks["language_instruction"]['attention_mask'], 
                         decoder_input_ids=decoder_input_ids).encoder_last_hidden_state
             else:
-                tokens = self.hf_model(
-                    input_ids=tasks["language_instruction"]['input_ids'].type(torch.long),
-                    attention_mask=tasks["language_instruction"]['attention_mask'], 
-                    decoder_input_ids=decoder_input_ids).encoder_last_hidden_state
-        else:
-            # add a # tokens dimension to language
-            if tasks["language_instruction"].ndim == 2:
-                tokens = tasks["language_instruction"][:, None, :]
-            else:
-                tokens = tasks["language_instruction"]
+                # add a # tokens dimension to language
+                if tasks["language_instruction"].ndim == 2:
+                    tokens = tasks["language_instruction"][:, None, :]
+                else:
+                    tokens = tasks["language_instruction"]
+
+        if "bert" in self.encoder:
+            tokens = observations['bert_tokens']
 
         # TODO: incorporate padding info from language tokens here too
         if self.proper_pad_mask:
@@ -287,10 +282,9 @@ class LanguageTokenizer(nn.Module):
                 ("language_instruction",),
             )
         else:
-            pad_mask = torch.ones(tokens.shape[:-1], device=self.device)  # TODO(saumya): device?
+            pad_mask = torch.ones(tokens.shape[:-1], device=self.device)
 
         return TokenGroup(tokens, pad_mask)
-
 
 class BinTokenizer(nn.Module):
     """

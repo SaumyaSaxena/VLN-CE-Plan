@@ -154,17 +154,17 @@ class Encoder1DBlock(nn.Module):
         self.mlp_dim = mlp_dim
         self.device = device
 
-        self.layer_norm1 = nn.LayerNorm(token_embedding_size).to(self.device)
+        self.layer_norm1 = nn.LayerNorm(token_embedding_size)
         self.multihead_attention = nn.MultiheadAttention(
             embed_dim=token_embedding_size,
             num_heads=num_heads,
             dropout=attention_dropout_rate,
             batch_first=True
-        ).to(self.device)
+        )
 
-        self.dropout = nn.Dropout(dropout_rate).to(self.device)
+        self.dropout = nn.Dropout(dropout_rate)
 
-        self.layer_norm2 = nn.LayerNorm(token_embedding_size).to(self.device)
+        self.layer_norm2 = nn.LayerNorm(token_embedding_size)
         self.mlp_block = MlpBlock(mlp_dim=mlp_dim, out_dim=token_embedding_size, dropout_rate=dropout_rate, device=device)
         
 
@@ -223,7 +223,7 @@ class Transformer(nn.Module):
         self.position_emb = AddPositionEmbs(window_size=window_size, dim=mlp_dim)
         self.pos_emb_dropout = nn.Dropout(dropout_rate)
 
-        self.encoder_blocks = []
+        self.encoder_blocks = nn.ModuleList()
         for _ in range(self.num_layers):
             self.encoder_blocks.append(
                 Encoder1DBlock(
@@ -236,18 +236,7 @@ class Transformer(nn.Module):
                 )
             )
         
-        self.layer_norm = nn.LayerNorm(token_embedding_size).to(self.device)
-
-    def get_trainable_parameters(self):
-        encoder_params = [b.parameters() for b in self.encoder_blocks]
-        encoder_params = list(itertools.chain(*encoder_params))
-        params = (
-            encoder_params + \
-            list(self.position_emb.parameters()) + \
-            list(self.pos_emb_dropout.parameters()) + \
-            list(self.layer_norm.parameters())
-        )
-        return params
+        self.layer_norm = nn.LayerNorm(token_embedding_size)
 
     def forward(self, x, attention_mask, *, train):
         """Applies Transformer model on the inputs.

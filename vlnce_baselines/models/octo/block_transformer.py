@@ -140,9 +140,7 @@ class BlockTransformer(nn.Module):
         self.num_attention_heads = transformer_kwargs['num_attention_heads']
         self.transformer = Transformer(**transformer_kwargs, device=device)
         self.device = device
-
-    def get_trainable_parameters(self):
-        return self.transformer.get_trainable_parameters()
+        self.attention_mask = None
     
     def forward(
         self,
@@ -185,15 +183,21 @@ class BlockTransformer(nn.Module):
         input_tokens = self.assemble_input_tokens(prefix_groups, timestep_groups)
         # Creates correct attention mask for transformer using group attention rules and masks
         # Shape: (batch*num_heads, total_tokens, total_tokens)
-        attention_mask = self.generate_attention_mask(prefix_groups, timestep_groups, self.num_attention_heads)
+        # Need to generate attention mask only once. After that it can be reused. TODO(saumya): Make this less hacky
+        if self.attention_mask is None:
+            self.attention_mask = self.generate_attention_mask(prefix_groups, timestep_groups, self.num_attention_heads)
 
-        # Sows attention mask for ease of retrieval when debugging
-        # https://flax.readthedocs.io/en/latest/api_reference/flax.linen/module.html#flax.linen.Module.sow
-        # self.sow("intermediates", "attention_mask", attention_mask)
+        pad_attention_mask = self.generate_pad_attention_mask(
+            prefix_groups, timestep_groups, self.num_attention_heads
+        )
+        comb_attention_mask = torch.logical_and(self.attention_mask, pad_attention_mask)
+        comb_attention_mask = comb_attention_mask.repeat(1,self.num_attention_heads,1,1)
+        comb_attention_mask = comb_attention_mask.reshape(-1,comb_attention_mask.shape[2],comb_attention_mask.shape[3])
+        comb_attention_mask = comb_attention_mask.to(dtype=torch.float32)
 
         # Run transformer
         output = self.transformer(
-            input_tokens, attention_mask, train=train
+            input_tokens, comb_attention_mask, train=train
         )
         # Split output into prefix and timestep groups
         all_prefix_outputs, all_timestep_outputs = self.split_output_tokens(
@@ -344,13 +348,8 @@ class BlockTransformer(nn.Module):
                 mask = int(metadata_i.should_attend_to(metadata_j))
                 attention_mask[i, j] = mask
 
-        pad_attention_mask = self.generate_pad_attention_mask(
-            prefix_groups, timestep_groups, num_heads
-        )
-        attention_mask = torch.logical_and(attention_mask, pad_attention_mask)
-        attention_mask = attention_mask.repeat(1,num_heads,1,1)
-        attention_mask = attention_mask.reshape(-1,attention_mask.shape[2],attention_mask.shape[3])
-        return attention_mask.to(dtype=torch.float32)
+        return attention_mask
+
 
     def generate_pad_attention_mask(
         self,
@@ -388,7 +387,7 @@ class BlockTransformer(nn.Module):
                 pad_mask.shape[1],
             ),
         )
-
+        
         return pad_mask
 
     def verify_causality(

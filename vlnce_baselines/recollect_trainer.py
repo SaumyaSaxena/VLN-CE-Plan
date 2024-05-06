@@ -70,6 +70,33 @@ class RecollectTrainer(BaseVLNCETrainer):
             f=os.path.join(ckpt_save_dir, f"ckpt.{epoch}.pth"),
         )
 
+    def print_parameters(self, model):
+        from prettytable import PrettyTable
+
+        table = PrettyTable(["Modules", "Parameters", "Requires grad", "Device"])
+
+        total_params, total_trainable_params = 0, 0
+        for name, parameter in model.named_parameters():
+            req_grad = True if parameter.requires_grad else False
+            params = parameter.numel()
+            table.add_row([name, params, req_grad, parameter.device])
+            total_params += params
+            if req_grad:
+                total_trainable_params += params
+        
+        print(table)
+        print(f"Total Params: {total_params}")
+        print(f"Total Trainable Params: {total_trainable_params}")
+
+        if total_trainable_params > 1e9:
+            print(f'{float(total_trainable_params) / 1e9:.2f} G ({total_trainable_params})')
+        elif total_trainable_params > 1e6:
+            print(f'{float(total_trainable_params) / 1e6:.2f} M ({total_trainable_params})')
+        elif total_trainable_params > 1e3:
+            print(f'{float(total_trainable_params) / 1e3:.2f} K ({total_trainable_params})')
+        else:
+            print(f'{float(total_trainable_params):.2f}')
+
     def train(self) -> None:
         split = self.config.TASK_CONFIG.DATASET.SPLIT
         self.config.defrost()
@@ -105,19 +132,7 @@ class RecollectTrainer(BaseVLNCETrainer):
             observation_space=dataset.observation_space,
             action_space=dataset.action_space,
         )
-        
-        trainable_size = np.sum([np.prod(p.shape) for p in self.policy.parameters() if p.requires_grad])
-        all_params_size = np.sum([np.prod(p.shape) for p in self.policy.parameters()])
-        print(f"all: {all_params_size}, trainable: {trainable_size}")
-    
-        if trainable_size > 1e9:
-            print(f'{float(trainable_size) / 1e9:.2f} G ({trainable_size})')
-        elif trainable_size > 1e6:
-            print(f'{float(trainable_size) / 1e6:.2f} M ({trainable_size})')
-        elif trainable_size > 1e3:
-            print(f'{float(trainable_size) / 1e3:.2f} K ({trainable_size})')
-        else:
-            print(f'{float(trainable_size):.2f}')
+        self.print_parameters(self.policy)
 
         if self.config.IL.RECOLLECT_TRAINER.effective_batch_size > 0:
             assert (
@@ -159,7 +174,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                 for batch_idx in t:
                     batch_time = time.time()
                     batch_str = f"{batch_idx + 1}/{batches_per_epoch}"
-
+                    
                     (
                         observations_batch, # rgb: (bs*max_traj_len_per_batch,h,w,3), lang: (bs*max_traj_len_per_batch, 512, 768)
                         prev_actions_batch, # (bs*max_traj_len_per_batch, 1)
@@ -167,7 +182,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                         corrected_actions_batch, # (max_traj_len_per_batch, bs)
                         weights_batch, # (max_traj_len_per_batch, bs)
                     ) = next(diter)
-                    import ipdb; ipdb.set_trace()
+
                     observations_batch = apply_obs_transforms_batch(
                         {
                             k: v.to(device=self.device, non_blocking=True)
@@ -222,6 +237,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                                 "Loss": round(loss, 4),
                                 "ActionLoss": round(action_loss, 4),
                                 "AuxLoss": round(aux_loss, 4),
+                                "BatchTime": round(time.time() - batch_time, 2)
                             }
                         )
                     else:

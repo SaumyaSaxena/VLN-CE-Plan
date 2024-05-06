@@ -140,7 +140,7 @@ class SmallStem(nn.Module):
         self.img_norm_type = img_norm_type
         self.device = device
 
-        self.std_convs, self.group_norms = [], []
+        self.std_convs, self.group_norms = nn.ModuleList(), nn.ModuleList()
         _in_channels = num_inp_channels
         for n, (kernel_size, stride, feature, padding) in enumerate(
             zip(
@@ -158,9 +158,9 @@ class SmallStem(nn.Module):
                     kernel_size=(kernel_size, kernel_size),
                     stride=(stride, stride),
                     padding=padding,
-                ).to(self.device)
+                )
             )
-            self.group_norms.append(nn.GroupNorm(feature, feature).to(self.device))
+            self.group_norms.append(nn.GroupNorm(feature, feature))
             _in_channels = feature
             
         self.conv = nn.Conv2d(
@@ -169,19 +169,11 @@ class SmallStem(nn.Module):
             kernel_size=(patch_size // 16, patch_size // 16),
             stride=(patch_size // 16, patch_size // 16),
             padding="valid",
-        ).to(self.device)
+        )
 
         if use_film:
             self.film_conditioning = FilmConditioning()
         
-    def get_trainable_parameters(self):
-        params = [param for layer in (
-            self.std_convs + self.group_norms + [self.conv]
-        ) for param in layer.parameters()]
-        if self.use_film:
-            params.extend(list(self.film_conditioning.parameters()))
-        return params
-
     def forward(self, observations: torch.Tensor, train: bool = True, cond_var=None):
         expecting_cond_var = self.use_film
         received_cond_var = cond_var is not None

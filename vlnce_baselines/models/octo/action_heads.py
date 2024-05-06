@@ -535,9 +535,6 @@ class DiffusionActionHead(nn.Module):
             bin_type="uniform",
             device=device,
         )
-
-    def get_trainable_parameters(self):
-        return self.diffusion_model.get_trainable_parameters()
     
     def forward(
         self,
@@ -565,7 +562,6 @@ class DiffusionActionHead(nn.Module):
                 (*embeddings.shape[:2], self.action_dim * self.pred_horizon),
                 dtype=torch.float32,
             ).to(self.device)
-
         pred_eps = self.diffusion_model(embeddings, noisy_actions, time, train=train)
         return pred_eps
 

@@ -21,6 +21,9 @@ from habitat_baselines.common.baseline_registry import baseline_registry
 
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.rl.ddppo.algo.ddp_utils import is_slurm_batch_job
+from habitat_baselines.common.obs_transformers import (
+    apply_obs_transforms_batch,
+)
 
 from vlnce_baselines.common.aux_losses import AuxLosses
 from vlnce_baselines.recollect_trainer import RecollectTrainer
@@ -34,95 +37,115 @@ from vlnce_baselines.common.utils import TopKLogger
 from vlnce_baselines.models.octo.octo_utils import get_octo_data
 from vlnce_baselines.models.octo_policy import OctoPolicy
 
+
+
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     # import tensorflow as tf  # noqa: F401
 
 from omegaconf import OmegaConf
 
-def collate_fn(batch):
-    """Each sample in batch: (
-        obs,
-        tasks,
-        prev_actions,
-        oracle_actions,
-        inflec_weight,
-    )
-    """
-
-    transposed = list(zip(*batch))
-    observations_batch = list(transposed[0])
-    prev_actions_batch = list(transposed[1])
-    corrected_actions_batch = list(transposed[2])
-    weights_batch = list(transposed[3])
-    tasks_batch = list(transposed[4])
-    
-    B = len(prev_actions_batch)
-
-    # Transpose observations
-    new_observations_batch = defaultdict(list)
-    for sensor in observations_batch[0]:
-        for bid in range(B):
-            new_observations_batch[sensor].append(
-                observations_batch[bid][sensor]
-            )
-    observations_batch = new_observations_batch
-    for sensor in observations_batch:
-        observations_batch[sensor] = torch.cat(
-            observations_batch[sensor], dim=0
+class MyCollator(object):
+    def __init__(self, obs_transforms, device):
+        self.obs_transforms = obs_transforms
+        self.device = device
+    def __call__(self, batch):
+        """Each sample in batch: (
+            obs,
+            tasks,
+            prev_actions,
+            oracle_actions,
+            inflec_weight,
         )
+        """
+        transposed = list(zip(*batch))
 
-    # Transpose tasks
-    new_tasks_batch = defaultdict(list)
-    for sensor in tasks_batch[0].keys():
-        if sensor not in ('language_instruction', 'pad_mask_dict'):
+        observations_batch = list(transposed[0])
+        prev_actions_batch = list(transposed[1])
+        corrected_actions_batch = list(transposed[2])
+        one_hot_actions = list(transposed[3])
+        # weights_batch = list(transposed[4])
+        instructions_batch = list(transposed[5])
+        
+        B = len(prev_actions_batch)
+
+        # Transpose observations
+        new_observations_batch = defaultdict(list)
+        for sensor in observations_batch[0]:
             for bid in range(B):
-                new_tasks_batch[sensor].append(
-                    tasks_batch[bid][sensor]
+                new_observations_batch[sensor].append(
+                    observations_batch[bid][sensor]
                 )
-    new_tasks_batch['language_instruction'] = defaultdict(list)
-    for sensor in tasks_batch[0]['language_instruction'].keys():
-        for bid in range(B):
-            new_tasks_batch['language_instruction'][sensor].append(
-                tasks_batch[bid]['language_instruction'][sensor]
+        observations_batch = new_observations_batch
+        for sensor in observations_batch:
+            observations_batch[sensor] = torch.cat(
+                observations_batch[sensor], dim=0
             )
-    new_tasks_batch['pad_mask_dict'] = defaultdict(list)
-    for sensor in tasks_batch[0]['pad_mask_dict'].keys():
-        for bid in range(B):
-            new_tasks_batch['pad_mask_dict'][sensor].append(
-                tasks_batch[bid]['pad_mask_dict'][sensor]
-            )
-    
-    tasks_batch = new_tasks_batch
-    for sensor in tasks_batch.keys():
-        if sensor not in ('language_instruction', 'pad_mask_dict'):
-            tasks_batch[sensor] = torch.cat(
-                tasks_batch[sensor], dim=0
-            )
-    for sensor in tasks_batch['language_instruction'].keys():
-        tasks_batch['language_instruction'][sensor] = torch.cat(
-            tasks_batch['language_instruction'][sensor], dim=0
-        )
-    for sensor in tasks_batch['pad_mask_dict'].keys():
-        tasks_batch['pad_mask_dict'][sensor] = torch.cat(
-            tasks_batch['pad_mask_dict'][sensor], dim=0
-        )
+        
+        # observations_batch = apply_obs_transforms_batch(observations_batch, self.obs_transforms)
+        # Transpose tasks
+        # new_tasks_batch = defaultdict(list)
+        # for sensor in tasks_batch[0].keys():
+        #     if sensor not in ('language_instruction', 'pad_mask_dict'):
+        #         for bid in range(B):
+        #             new_tasks_batch[sensor].append(
+        #                 tasks_batch[bid][sensor]
+        #             )
+        # if 'language_instruction' in tasks_batch[0].keys():
+        #     new_tasks_batch['language_instruction'] = defaultdict(list)
+        #     for sensor in tasks_batch[0]['language_instruction'].keys():
+        #         for bid in range(B):
+        #             new_tasks_batch['language_instruction'][sensor].append(
+        #                 tasks_batch[bid]['language_instruction'][sensor]
+        #             )
+        # new_tasks_batch['pad_mask_dict'] = defaultdict(list)
+        # for sensor in tasks_batch[0]['pad_mask_dict'].keys():
+        #     for bid in range(B):
+        #         new_tasks_batch['pad_mask_dict'][sensor].append(
+        #             tasks_batch[bid]['pad_mask_dict'][sensor]
+        #         )
+        
+        # tasks_batch = new_tasks_batch
+        # for sensor in tasks_batch.keys():
+        #     if sensor not in ('language_instruction', 'pad_mask_dict'):
+        #         tasks_batch[sensor] = torch.cat(
+        #             tasks_batch[sensor], dim=0
+        #         )
+        # if 'language_instruction' in tasks_batch.keys():
+        #     for sensor in tasks_batch['language_instruction'].keys():
+        #         tasks_batch['language_instruction'][sensor] = torch.cat(
+        #             tasks_batch['language_instruction'][sensor], dim=0
+        #         )
+        # for sensor in tasks_batch['pad_mask_dict'].keys():
+        #     tasks_batch['pad_mask_dict'][sensor] = torch.cat(
+        #         tasks_batch['pad_mask_dict'][sensor], dim=0
+        #     )
 
-    corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
-    final_obs_batch = dict()
-    final_obs_batch["observation"] = dict()
-    # appending rgb and depth together and creating history dimension. Shape: (b, history=1, h, w, 4)
-    final_obs_batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1)
-    batch_size = observations_batch['rgb'].shape[0]
-    # Pad mask for the whole batch with history=1
-    final_obs_batch["observation"]['pad_mask'] = torch.tensor([True]*batch_size).unsqueeze(1)
-    final_obs_batch["observation"]['pad_mask_dict'] = dict()
-    final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.tensor([True]*batch_size).unsqueeze(1)
+        corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
+        one_hot_actions = torch.cat(one_hot_actions, dim=0)
 
-    final_obs_batch['task'] = tasks_batch
-    final_obs_batch['action'] = torch.nn.functional.one_hot(corrected_actions_batch, num_classes=6).unsqueeze(1)
+        final_obs_batch = dict()
+        final_obs_batch["observation"] = dict()
+        # appending rgb and depth together and creating history dimension. Shape: (b, history=1, h, w, 4)
+        # final_obs_batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1)
+        final_obs_batch["observation"]['rgb'] = observations_batch['rgb']
+        final_obs_batch["observation"]['depth'] = observations_batch['depth']
+        
+        final_obs_batch["observation"]['bert_tokens'] = observations_batch['rxr_instruction']
 
-    return final_obs_batch
+        batch_size = observations_batch['rgb'].shape[0]
+        # Pad mask for the whole batch with history=1
+        final_obs_batch["observation"]['pad_mask'] = torch.ones((batch_size,1), dtype=bool)
+        final_obs_batch["observation"]['pad_mask_dict'] = dict()
+        final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,1), dtype=bool)
+
+        # final_obs_batch['task'] = tasks_batch
+        final_obs_batch['action'] = one_hot_actions.unsqueeze(1)
+
+        instructions_batch_flat = []
+        for row in instructions_batch:
+            instructions_batch_flat += row
+        return final_obs_batch, instructions_batch_flat
     
 @baseline_registry.register_trainer(name="octo_trainer")
 class OctoRecollectTrainer(RecollectTrainer):
@@ -168,7 +191,8 @@ class OctoRecollectTrainer(RecollectTrainer):
         self.policy = OctoPolicy.from_config(self.octo_config, example_batch, dataset_statistics, self.device)
         self.policy.to(self.device)
         # wandb.config.update(opt)
-
+        
+        self.print_parameters(self.policy)
         self.optimizer = create_optimizer_with_params(config.train.optimizer, self.policy.get_trainable_parameters())
 
         # Create scheduler
@@ -276,8 +300,8 @@ class OctoRecollectTrainer(RecollectTrainer):
             )
         self.policy.train()
 
-        dataset = OctoTeacherRecollectionDataset(self.policy, self.config)
-        
+        dataset = OctoTeacherRecollectionDataset(self.config, self.octo_config)
+        collate_fn = MyCollator(dataset.obs_transforms, self.device)
         diter = iter(
             torch.utils.data.DataLoader(
                 dataset,
@@ -286,22 +310,9 @@ class OctoRecollectTrainer(RecollectTrainer):
                 collate_fn=collate_fn,
                 pin_memory=False,
                 drop_last=True,
-                num_workers=16,
+                num_workers=1,
             )
         )
-        
-        trainable_size = np.sum([np.prod(p.shape) for p in self.policy.get_trainable_parameters() if p.requires_grad])
-        all_params_size = np.sum([np.prod(p.shape) for p in self.policy.parameters()])
-        print(f"all: {all_params_size}, trainable: {trainable_size}")
-    
-        if trainable_size > 1e9:
-            print(f'{float(trainable_size) / 1e9:.2f} G ({trainable_size})')
-        elif trainable_size > 1e6:
-            print(f'{float(trainable_size) / 1e6:.2f} M ({trainable_size})')
-        elif trainable_size > 1e3:
-            print(f'{float(trainable_size) / 1e3:.2f} K ({trainable_size})')
-        else:
-            print(f'{float(trainable_size):.2f}')
 
         if self.config.IL.OCTO_TRAINER.effective_batch_size > 0:
             assert (
@@ -339,7 +350,19 @@ class OctoRecollectTrainer(RecollectTrainer):
                 batch_time = time.time()
                 batch_str = f"{batch_idx + 1}/{batches_per_epoch}"
 
-                batch = next(diter)
+                batch, instructions = next(diter)
+
+                if "t5" in self.octo_config.model.task_tokenizers.language.kwargs.encoder:
+                    task = {"language_instruction": [], "pad_mask_dict": {"language_instruction": []}}
+                    task["language_instruction"] = self.policy.text_processor.encode(instructions)
+                    for k, v in task["language_instruction"].items():
+                        task["language_instruction"][k] = v.to(device=self.device, non_blocking=True)
+                else:
+                    task = {"pad_mask_dict": {"language_instruction": []}}
+                task["pad_mask_dict"]["language_instruction"] = torch.ones(
+                    len(instructions), dtype=bool
+                ).to(device=self.device, non_blocking=True)
+
                 for k, v in batch["observation"].items():
                     if "pad_mask_dict" not in k:
                         batch["observation"][k] = v.to(device=self.device, non_blocking=True)
@@ -348,17 +371,25 @@ class OctoRecollectTrainer(RecollectTrainer):
                     batch["observation"]['pad_mask_dict'][k] = v.to(device=self.device, non_blocking=True)
                 
                 batch['action'] = batch['action'].to(device=self.device, non_blocking=True)
-
-                for k, v in batch["task"].items():
-                    if k not in ("pad_mask_dict", "language_instruction"):
-                        batch["task"][k] = v.to(device=self.device, non_blocking=True)
+                observations_batch = apply_obs_transforms_batch(
+                    {
+                        'rgb': batch["observation"]['rgb'],
+                        'depth': batch["observation"]['depth'],
+                    },
+                    dataset.obs_transforms,
+                )
+                batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1)
                 
-                for k, v in batch["task"]["language_instruction"].items():
-                    batch["task"]["language_instruction"][k] = v.to(device=self.device, non_blocking=True)
+                # for k, v in batch["task"].items():
+                #     if k not in ("pad_mask_dict", "language_instruction"):
+                #         batch["task"][k] = v.to(device=self.device, non_blocking=True)
+                # if 'language_instruction' in batch["task"].keys():
+                #     for k, v in batch["task"]["language_instruction"].items():
+                #         batch["task"]["language_instruction"][k] = v.to(device=self.device, non_blocking=True)
                 
-                for k, v in batch["task"]["pad_mask_dict"].items():
-                    batch["task"]["pad_mask_dict"][k] = v.to(device=self.device, non_blocking=True)
-
+                # for k, v in batch["task"]["pad_mask_dict"].items():
+                #     batch["task"]["pad_mask_dict"][k] = v.to(device=self.device, non_blocking=True)
+                
                 # gradient accumulation
                 if (
                     self.config.IL.OCTO_TRAINER.effective_batch_size
@@ -377,9 +408,14 @@ class OctoRecollectTrainer(RecollectTrainer):
 
                 action_loss, loss_dict = self._update_agent(
                     batch,
+                    task,
                     step_grad=step_grad,
                     loss_accumulation_scalar=loss_accumulation_scalar,
                 )
+                if self.step_id % 10 == 0:
+                    if torch.cuda.is_available():
+                        with torch.cuda.device(self.device):
+                            torch.cuda.empty_cache()
 
                 if self.config.use_pbar:
                     t.set_postfix(
@@ -388,16 +424,17 @@ class OctoRecollectTrainer(RecollectTrainer):
                             # "Loss": round(loss, 4),
                             "ActionLoss": round(action_loss, 4),
                             # "AuxLoss": round(aux_loss, 4),
+                            "BatchTime": round(time.time() - batch_time, 2),
                         }
                     )
                 
-                    logger.info(
-                        f"[Epoch: {epoch_str}] [Batch: {batch_str}]"
-                        + f" [BatchTime: {round(time.time() - batch_time, 2)}s]"
-                        + f" [EpochTime: {round(time.time() - epoch_time)}s]"
-                        + f" [Loss: {round(action_loss, 4)}]"
-                        # + aux_s
-                    )
+                    # logger.info(
+                    #     f"[Epoch: {epoch_str}] [Batch: {batch_str}]"
+                    #     + f" [BatchTime: {round(time.time() - batch_time, 2)}s]"
+                    #     + f" [EpochTime: {round(time.time() - epoch_time)}s]"
+                    #     + f" [Loss: {round(action_loss, 4)}]"
+                    #     # + aux_s
+                    # )
 
                 if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
                     # tb_writer.add_scalar("loss", loss, self.step_id)
@@ -439,15 +476,16 @@ class OctoRecollectTrainer(RecollectTrainer):
 
     def _update_agent(self, 
         batch,
+        task,
         step_grad: bool = True,
         loss_accumulation_scalar: int = 1,
     ):
         transformer_embeddings = self.policy.module.octo_transformer(
             batch["observation"],
-            batch["task"],
+            task,
             batch["observation"]["pad_mask"]
         )
-        action_loss, loss_dict = self.policy.module.heads["action"].loss(
+        action_loss, loss_dict = self.policy.module.heads[0].loss(
             transformer_embeddings,  # Action head knows to pull out the action readout_key
             batch["action"],
             pad_mask=batch["observation"]["pad_mask"]
