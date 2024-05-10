@@ -1,10 +1,10 @@
-BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_subtasks.yaml
+BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_task.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
 TORCH_GPU_ID: 0
 NUM_ENVIRONMENTS: 5 # Number of envs per GPU
-TENSORBOARD_DIR: outputs/rxr_octo_en_subtasks
-CHECKPOINT_FOLDER: outputs/rxr_octo_en_subtasks
+TENSORBOARD_DIR: outputs/rxr_octo_en
+CHECKPOINT_FOLDER: outputs/rxr_octo_en
 CONTEXT_LEARNING: False
 OCTO_CONFIG_PATH: '/home/saumyas/Projects/VLN-CE-Plan/vlnce_baselines/config/rxr_baselines/rxr_octo_config.yaml'
 
@@ -12,7 +12,7 @@ wandb:
   entity: iam-lab
   group: octo
   project: vlnce_plan
-  name: octo_subtasks
+  name: octo_full_instr
   saver:
     upload: True
     save_top_k: 5
@@ -30,12 +30,12 @@ EVAL:
   SAVE_RESULTS: False
   logger_type: 'wandb' # 'wandb', 'tb'
   wandb_load:
-    run_path: 'iam-lab/vlnce_plan/hd9r6ub5'
-    file: checkpoints/ckpt_epoch_3_step_60300_action_loss_1.146.pth
+    run_path: 'iam-lab/vlnce_plan/5yoglgao'
+    file: checkpoints/ckpt_epoch_3_step_39992_action_loss_1.289.pth
     entity: iam-lab
     project: vlnce_plan_eval
     group: octo
-    name: subtasks
+    name: full_instr
   tb_load:
     EVAL_CKPT_PATH_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57/checkpoints/ckpt.14.pth # If this is a directory, evaluate all checkpoints. Else evaluate the specified checkpoint.pth
     EVAL_LOG_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57
@@ -83,7 +83,7 @@ IL:
     action_repr: 'discrete' #'one-hot', 'bits'
     preload_size: 30
     preload_trajectories_file: False
-    trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories_subtasks_merged.json.gz
+    trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories.json.gz
     max_traj_len: 250  # 1.3% of episodes in the English training split are above 250
     logger_type: 'wandb' # 'wandb', 'tb'
 

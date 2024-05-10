@@ -100,15 +100,23 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         """
         if pad_mask is None:
             pad_mask = observations["pad_mask"]
-        transformer_outputs, _ = self.run_transformer(
-            observations, tasks, pad_mask, train=train
+        # transformer_outputs, _ = self.run_transformer(
+        #     observations, tasks, pad_mask, train=train
+        # )
+
+        transformer_outputs = self.module.octo_transformer(
+            observations,
+            tasks,
+            pad_mask,
+            train=train
         )
-        return self.module.heads["action"].predict_action(
+        return self.module.heads[0].predict_action(
             transformer_outputs,
             train=train,
             argmax=argmax,
             sample_shape=sample_shape,
             temperature=temperature,
+            device=self.device
         )
 
     def create_tasks(self, goals=None, texts=None):
@@ -168,46 +176,46 @@ class OctoPolicy(nn.Module, metaclass=abc.ABCMeta):
         # _verify_shapes(tasks, "tasks", self.example_batch["task"], starting_dim=1)
         return tasks
     
-    def run_transformer(
-        self, observations, tasks, pad_mask, train: bool = False
-    ):
-        """Runs the transformer, but does shape checking on the inputs.
+    # def run_transformer(
+    #     self, observations, tasks, pad_mask, train: bool = False
+    # ):
+    #     """Runs the transformer, but does shape checking on the inputs.
 
-        Args:
-            observations: dictionary of arrays of shape (batch_size, window_size, *shape).
-                Shape must be consistent with self.example_batch["observation"]
-            tasks: dict of tasks of shape (batch_size, *shape)
-                Shape must be consistent with self.example_batch["task"]
-            pad_mask: (batch_size, window_size) Boolean mask that is False when the timestep corresponds to padding
-            train: whether to run in train mode
-        """
-        # _verify_shapes(
-        #     observations,
-        #     "observations",
-        #     self.example_batch["observation"],
-        #     starting_dim=2,
-        # )
-        # _verify_shapes(tasks, "tasks", self.example_batch["task"], starting_dim=1)
+    #     Args:
+    #         observations: dictionary of arrays of shape (batch_size, window_size, *shape).
+    #             Shape must be consistent with self.example_batch["observation"]
+    #         tasks: dict of tasks of shape (batch_size, *shape)
+    #             Shape must be consistent with self.example_batch["task"]
+    #         pad_mask: (batch_size, window_size) Boolean mask that is False when the timestep corresponds to padding
+    #         train: whether to run in train mode
+    #     """
+    #     # _verify_shapes(
+    #     #     observations,
+    #     #     "observations",
+    #     #     self.example_batch["observation"],
+    #     #     starting_dim=2,
+    #     # )
+    #     # _verify_shapes(tasks, "tasks", self.example_batch["task"], starting_dim=1)
 
-        return self.module(
-            observations,
-            tasks,
-            pad_mask,
-            train=train,
-        )
+    #     return self.module(
+    #         observations,
+    #         tasks,
+    #         pad_mask,
+    #         train=train,
+    #     )
 
-    def loss_fn(self, params, batch, rng, train=True):
-        bound_module = self.module.bind({"params": params}, rngs={"dropout": rng})
-        transformer_embeddings = bound_module.octo_transformer(
-            batch["observation"],
-            batch["task"],
-            batch["observation"]["pad_mask"],
-            train=train,
-        )
-        action_loss, action_metrics = bound_module.heads["action"].loss(
-            transformer_embeddings,  # action head knows to pull out the "action" readout_key
-            batch["action"],
-            pad_mask=batch["observation"]["pad_mask"],
-            train=train,
-        )
-        return action_loss, action_metrics
+    # def loss_fn(self, params, batch, rng, train=True):
+    #     bound_module = self.module.bind({"params": params}, rngs={"dropout": rng})
+    #     transformer_embeddings = bound_module.octo_transformer(
+    #         batch["observation"],
+    #         batch["task"],
+    #         batch["observation"]["pad_mask"],
+    #         train=train,
+    #     )
+    #     action_loss, action_metrics = bound_module.heads["action"].loss(
+    #         transformer_embeddings,  # action head knows to pull out the "action" readout_key
+    #         batch["action"],
+    #         pad_mask=batch["observation"]["pad_mask"],
+    #         train=train,
+    #     )
+    #     return action_loss, action_metrics

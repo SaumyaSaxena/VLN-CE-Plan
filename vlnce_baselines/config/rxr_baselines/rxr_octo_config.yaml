@@ -112,10 +112,13 @@ model:
       args: []
       kwargs:
         action_dim: 6
+        max_action: 5
         pred_horizon: ${pred_horizon}
         readout_key: readout_action
         use_map: false
         embedding_size: ${model.token_embedding_size}
+        prediction_type: 'noise' # 'action'
+        loss_type: 'mse' # 'l1', 'softmax_cross_ent'
       module: vlnce_baselines.models.octo.action_heads
       name: DiffusionActionHead
   max_horizon: 10

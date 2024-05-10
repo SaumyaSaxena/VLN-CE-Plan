@@ -111,11 +111,8 @@ def continuous_loss(
 
     loss = masked_mean(loss, mask)
 
-    mse = torch.square(pred_value - ground_truth_value)
-    mse = masked_mean(mse, mask)
     return loss, {
-        "loss": loss,
-        "mse": mse,
+        f"{loss_type}_loss": loss
     }
 
 
@@ -480,6 +477,7 @@ class DiffusionActionHead(nn.Module):
         pred_horizon: int = 1,
         action_dim: int = 7,
         max_action: float = 5.0,
+        prediction_type: str = 'noise'
         loss_type: str = "mse",
         embedding_size: int = 384,
         # diffusion-specific config with sane defaults
@@ -497,6 +495,7 @@ class DiffusionActionHead(nn.Module):
         self.pred_horizon = pred_horizon
         self.action_dim = action_dim
         self.max_action = max_action
+        self.prediction_type = prediction_type
         self.loss_type = loss_type
         self.embedding_size = embedding_size
 
@@ -530,11 +529,11 @@ class DiffusionActionHead(nn.Module):
             [torch.prod(self.alphas[: i + 1]) for i in range(self.diffusion_steps)]
         ).to(self.device)
 
-        self.action_tokenizer = BinTokenizer(
-            n_bins=self.action_dim,
-            bin_type="uniform",
-            device=device,
-        )
+        # self.action_tokenizer = BinTokenizer(
+        #     n_bins=self.action_dim,
+        #     bin_type="uniform",
+        #     device=device,
+        # )
     
     def forward(
         self,
@@ -562,6 +561,7 @@ class DiffusionActionHead(nn.Module):
                 (*embeddings.shape[:2], self.action_dim * self.pred_horizon),
                 dtype=torch.float32,
             ).to(self.device)
+
         pred_eps = self.diffusion_model(embeddings, noisy_actions, time, train=train)
         return pred_eps
 
@@ -599,14 +599,30 @@ class DiffusionActionHead(nn.Module):
         alpha_1 = torch.sqrt(alpha_hat)
         alpha_2 = torch.sqrt(1 - alpha_hat)
         noisy_actions = alpha_1 * actions_flat + alpha_2 * noise
-
+        
         pred_eps = self(
             transformer_outputs, train=train, time=time, noisy_actions=noisy_actions
         )
 
-        # loss, metrics = continuous_loss(
-        #     pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
-        # )
+        if 'mse' in self.loss_type:
+            loss, metrics = continuous_loss(
+                pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
+            )
+            metrics["mse_loss"] = metrics["mse_loss"] * self.action_dim
+        elif 'l1' in self.loss_type:
+            loss, metrics = continuous_loss(
+                pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
+            )
+            metrics["l1_loss"] = metrics["l1_loss"] * self.action_dim
+        elif 'softmax_cross_ent' in self.loss_type:
+            loss, metrics = softmax_cross_entropy_loss(
+                pred_eps,
+                noise,
+                pad_mask,
+            )
+            metrics["cross_ent_loss"] = metrics["cross_ent_loss"] * self.action_dim
+        else:
+            raise NotImplementedError("Loss type not defined.")
 
         # loss, metrics = discrete_loss(
         #     self.action_tokenizer,
@@ -615,16 +631,9 @@ class DiffusionActionHead(nn.Module):
         #     pad_mask[:, :, None],
         # )
 
-        loss, metrics = softmax_cross_entropy_loss(
-            pred_eps,
-            noise,
-            pad_mask,
-        )
-
         # Sum over action dimension instead of averaging
         loss = loss * self.action_dim
-        metrics["cross_ent_loss"] = metrics["cross_ent_loss"] * self.action_dim
-        metrics["mse"] = metrics["mse"] * self.action_dim
+        
         return loss, metrics
 
     def predict_action(
@@ -634,6 +643,7 @@ class DiffusionActionHead(nn.Module):
         argmax: bool = False,
         sample_shape: tuple = (),
         temperature: float = 1.0,
+        device = 'cuda',
     ) -> torch.Tensor:
         """Convenience methods for predicting actions for the final timestep in the window."""
         def scan_fn(current_x, time):
@@ -645,20 +655,20 @@ class DiffusionActionHead(nn.Module):
             alpha_2 = (1 - self.alphas[time]) / (torch.sqrt(1 - self.alpha_hats[time]))
             current_x = alpha_1 * (current_x - alpha_2 * eps_pred)
 
-            z = torch.randn(current_x.shape)
+            z = torch.randn(current_x.shape).to(device=device)
             current_x = current_x + (time > 0) * (torch.sqrt(self.betas[time]) * z)
 
             current_x = torch.clip(current_x, -self.max_action, self.max_action)
 
             return current_x
 
-        def sample_actions(sample):
+        def sample_actions(device):
             batch_size, window_size = transformer_outputs[
                 self.readout_key
             ].tokens.shape[:2]
 
-            actions_flat = torch.randn((batch_size, window_size, self.pred_horizon * self.action_dim))
-            steps = torch.arange(self.diffusion_steps - 1, -1, -1)
+            actions_flat = torch.randn((batch_size, window_size, self.pred_horizon * self.action_dim)).to(device=device)
+            steps = torch.arange(self.diffusion_steps - 1, -1, -1).to(device=device)
             for x in steps:
                 actions_flat = scan_fn(actions_flat, x)
 
@@ -670,18 +680,18 @@ class DiffusionActionHead(nn.Module):
             )
 
             if argmax:
-                action_tokens = torch.argmax(actions, axis=-1).astype(torch.int32)
+                action_tokens = torch.argmax(actions, axis=-1).type(torch.int32)
                 action_tokens = torch.broadcast_to(
                     action_tokens, sample_shape + action_tokens.shape
                 )
             else:
                 dist = torch.distributions.Categorical(logits=actions / temperature)
-                action_tokens = dist.sample(sample_shape=sample_shape).astype(
+                action_tokens = dist.sample(sample_shape=sample_shape).type(
                     torch.int32
                 )
-            return self.action_tokenizer.decode(action_tokens)[:,-1] # only get the last timestep in the window
+            # return self.action_tokenizer.decode(action_tokens)[:,-1] # only get the last timestep in the window
+            return action_tokens[:,-1]
 
-        n_samples = int(np.prod(sample_shape))
-        actions = sample_actions(n_samples)
+        actions = sample_actions(device)
         # actions = actions.reshape(sample_shape + actions.shape[1:])
         return actions

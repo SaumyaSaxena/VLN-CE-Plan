@@ -172,6 +172,21 @@ def create_schedulder_with_params(config: Mapping[str, Any], optimizer) -> Tuple
     
     return scheduler, extra_dict
 
+def int2bits(x, n, out_dtype=None):
+    """Convert an integer x in (...) into bits in (..., n)."""
+    x = torch.bitwise_right_shift(x.unsqueeze(-1), torch.arange(n))
+    x = x % 2
+    if out_dtype and out_dtype != x.dtype:
+        x = x.type(out_dtype)
+    return x
+
+def bits2int(x, out_dtype):
+    """Converts bits x in (..., n) into an integer in (...)."""
+    x = x.type(out_dtype)
+    x = torch.sum(x * (2 ** torch.arange(x.shape[-1])), -1)
+    return x
+
+
 class TopKLogger:
     def __init__(self, k: int):
         self.max_to_keep = k
@@ -190,3 +205,9 @@ class TopKLogger:
                 return True
             else:
                 return False
+            
+if __name__ == "__main__":
+    aa = torch.tensor([1, 2, 3])
+    bits = int2bits(aa, 10)
+    ints = bits2int(bits, torch.int32)
+    import ipdb; ipdb.set_trace()

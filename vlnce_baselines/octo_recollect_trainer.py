@@ -5,6 +5,7 @@ from typing import List
 import datetime
 from PIL import Image
 import numpy as np
+import json
 
 from habitat import Config
 from gym import Space
@@ -17,26 +18,33 @@ import wandb
 
 from habitat import logger
 from habitat_baselines.common.baseline_registry import baseline_registry
-
+from habitat_baselines.common.environments import get_env_class
 
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.rl.ddppo.algo.ddp_utils import is_slurm_batch_job
 from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_batch,
+    get_active_obs_transforms,
 )
+from habitat.utils.visualizations.utils import append_text_to_image
 
+from vlnce_baselines.common.env_utils import construct_envs_auto_reset_false
 from vlnce_baselines.common.aux_losses import AuxLosses
 from vlnce_baselines.recollect_trainer import RecollectTrainer
 
 from vlnce_baselines.common.recollection_dataset import (
     OctoTeacherRecollectionDataset,
 )
-from vlnce_baselines.common.utils import create_optimizer_with_params, create_schedulder_with_params
+from vlnce_baselines.common.utils import (
+    create_optimizer_with_params, 
+    create_schedulder_with_params, 
+    extract_instruction_tokens,
+)
 from vlnce_baselines.common.utils import TopKLogger
 
 from vlnce_baselines.models.octo.octo_utils import get_octo_data
 from vlnce_baselines.models.octo_policy import OctoPolicy
-
+from habitat_extensions.utils import generate_video, observations_to_image, text_to_append
 
 
 with warnings.catch_warnings():
@@ -81,45 +89,6 @@ class MyCollator(object):
             observations_batch[sensor] = torch.cat(
                 observations_batch[sensor], dim=0
             )
-        
-        # observations_batch = apply_obs_transforms_batch(observations_batch, self.obs_transforms)
-        # Transpose tasks
-        # new_tasks_batch = defaultdict(list)
-        # for sensor in tasks_batch[0].keys():
-        #     if sensor not in ('language_instruction', 'pad_mask_dict'):
-        #         for bid in range(B):
-        #             new_tasks_batch[sensor].append(
-        #                 tasks_batch[bid][sensor]
-        #             )
-        # if 'language_instruction' in tasks_batch[0].keys():
-        #     new_tasks_batch['language_instruction'] = defaultdict(list)
-        #     for sensor in tasks_batch[0]['language_instruction'].keys():
-        #         for bid in range(B):
-        #             new_tasks_batch['language_instruction'][sensor].append(
-        #                 tasks_batch[bid]['language_instruction'][sensor]
-        #             )
-        # new_tasks_batch['pad_mask_dict'] = defaultdict(list)
-        # for sensor in tasks_batch[0]['pad_mask_dict'].keys():
-        #     for bid in range(B):
-        #         new_tasks_batch['pad_mask_dict'][sensor].append(
-        #             tasks_batch[bid]['pad_mask_dict'][sensor]
-        #         )
-        
-        # tasks_batch = new_tasks_batch
-        # for sensor in tasks_batch.keys():
-        #     if sensor not in ('language_instruction', 'pad_mask_dict'):
-        #         tasks_batch[sensor] = torch.cat(
-        #             tasks_batch[sensor], dim=0
-        #         )
-        # if 'language_instruction' in tasks_batch.keys():
-        #     for sensor in tasks_batch['language_instruction'].keys():
-        #         tasks_batch['language_instruction'][sensor] = torch.cat(
-        #             tasks_batch['language_instruction'][sensor], dim=0
-        #         )
-        # for sensor in tasks_batch['pad_mask_dict'].keys():
-        #     tasks_batch['pad_mask_dict'][sensor] = torch.cat(
-        #         tasks_batch['pad_mask_dict'][sensor], dim=0
-        #     )
 
         corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
         one_hot_actions = torch.cat(one_hot_actions, dim=0)
@@ -184,9 +153,30 @@ class OctoRecollectTrainer(RecollectTrainer):
         self,
         config: Config,
         load_from_ckpt: bool,
+        eval_dir = '',
     ) -> None:
-        
-        self.octo_config = OmegaConf.load(config['OCTO_CONFIG_PATH'])
+        if load_from_ckpt:
+            if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
+                logger.info(f"Run path: {self.config.EVAL.wandb_load.run_path}. File: {self.config.EVAL.wandb_load.file}")
+                ckpt_file = wandb.restore(str(self.config.EVAL.wandb_load.file), run_path=self.config.EVAL.wandb_load.run_path,
+                    root=eval_dir, replace=False)
+                ckpt = torch.load(ckpt_file.name)
+            
+            if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
+                logger.info(f"checkpoint_path: {self.config.EVAL.EVAL_CKPT_PATH_DIR}")
+                ckpt = self.load_checkpoint(self.config.EVAL.EVAL_CKPT_PATH_DIR, map_location=self.device)
+            self.octo_config = ckpt['octo_config']
+        else:
+            self.octo_config = OmegaConf.load(config['OCTO_CONFIG_PATH'])
+
+        if 'discrete' in config.IL.OCTO_TRAINER.action_repr:
+            self.octo_config.model.heads.action.kwargs.action_dim = 1
+        if 'one-hot' in config.IL.OCTO_TRAINER.action_repr:
+            self.octo_config.model.heads.action.kwargs.action_dim = 6
+        if 'bits' in config.IL.OCTO_TRAINER.action_repr:
+            self.octo_config.model.heads.action.kwargs.action_dim = 6
+
+
         example_batch, dataset_statistics = get_octo_data(self.octo_config.pretrained_ckpt_path)
         self.policy = OctoPolicy.from_config(self.octo_config, example_batch, dataset_statistics, self.device)
         self.policy.to(self.device)
@@ -209,14 +199,8 @@ class OctoRecollectTrainer(RecollectTrainer):
             self.grad_clip_norm = config.train.grad_clip.norm
 
         if load_from_ckpt:
-            ckpt_path = config.IL.ckpt_to_load
-            ckpt_dict = self.load_checkpoint(ckpt_path, map_location="cpu")
-            self.policy.load_state_dict(ckpt_dict["state_dict"])
-            if config.IL.is_requeue:
-                self.optimizer.load_state_dict(ckpt_dict["optim_state"])
-                self.start_epoch = ckpt_dict["epoch"] + 1
-                self.step_id = ckpt_dict["step_id"]
-            logger.info(f"Loaded weights from checkpoint: {ckpt_path}")
+            self.policy.load_state_dict(ckpt["state_dict"])
+            logger.info(f"Loaded weights from checkpoint")
 
         params = sum(param.numel() for param in self.policy.parameters())
         params_t = sum(
@@ -264,10 +248,14 @@ class OctoRecollectTrainer(RecollectTrainer):
             self.config.TASK_CONFIG.TASK.NDTW.GT_PATH
         )
         self.config.use_pbar = not is_slurm_batch_job()
+        self.config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.SHUFFLE = True
         self.config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.MAX_SCENE_REPEAT_STEPS = (
             -1
         )
         self.config.train.scheduler.timm_cosine.epochs = self.config.IL.epochs # TODO: why is this not updating in cfg
+        
+
+        
         self.config.freeze()
 
         current_time = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
@@ -347,6 +335,7 @@ class OctoRecollectTrainer(RecollectTrainer):
             # self.save_checkpoint(epoch, self.step_id, ckpt_save_dir, 0, self.config.wandb.saver.upload)
 
             for batch_idx in t:
+                # torch.cuda.memory._record_memory_history()
                 batch_time = time.time()
                 batch_str = f"{batch_idx + 1}/{batches_per_epoch}"
 
@@ -379,6 +368,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                     dataset.obs_transforms,
                 )
                 batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1)
+                del observations_batch
                 
                 # for k, v in batch["task"].items():
                 #     if k not in ("pad_mask_dict", "language_instruction"):
@@ -406,16 +396,20 @@ class OctoRecollectTrainer(RecollectTrainer):
                     loss_accumulation_scalar = 1
                     step_grad = True
 
-                action_loss, loss_dict = self._update_agent(
+                action_loss, metrics_dict = self._update_agent(
                     batch,
                     task,
                     step_grad=step_grad,
                     loss_accumulation_scalar=loss_accumulation_scalar,
                 )
-                if self.step_id % 10 == 0:
-                    if torch.cuda.is_available():
-                        with torch.cuda.device(self.device):
-                            torch.cuda.empty_cache()
+
+                del batch, task
+
+                if torch.cuda.is_available():
+                    with torch.cuda.device(self.device):
+                        torch.cuda.empty_cache()
+                # if self.step_id % 100 == 0:
+                #     torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
 
                 if self.config.use_pbar:
                     t.set_postfix(
@@ -437,9 +431,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                     # )
 
                 if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
-                    # tb_writer.add_scalar("loss", loss, self.step_id)
                     tb_writer.add_scalar("action_loss", action_loss, self.step_id)
-                    # tb_writer.add_scalar("aux_loss", aux_loss, self.step_id)
                 
                 if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
                     optim_logs = {'epoch': epoch}
@@ -447,19 +439,20 @@ class OctoRecollectTrainer(RecollectTrainer):
                         optim_logs['optim/lr'] = self.get_current_learning_rate(epoch)
 
                     log_dict = {'train_loss': action_loss}
-                    log_dict.update(loss_dict)
+                    log_dict.update(metrics_dict)
                     log_dict.update(optim_logs)
                     wandb.log(log_dict, step=self.step_id)
 
                 epoch_logs['loss'].append(action_loss)
-                for k, v in loss_dict.items():
+                for k, v in metrics_dict.items():
                     if epoch_logs.get(k) is None:
                         epoch_logs[k] = []
-                    epoch_logs[k].append(v)
+                    epoch_logs[k].append(v.item())
                 if self.scheduler is not None:
                     epoch_logs['optim/lr'].append(self.get_current_learning_rate(epoch))
 
                 self.step_id += 1  # noqa: SIM113
+                del action_loss, metrics_dict
             
             # Saving/updates at epoch level
             if self.scheduler and self.scheduler_t_in_epochs:
@@ -498,7 +491,7 @@ class OctoRecollectTrainer(RecollectTrainer):
         # loss = action_loss + aux_loss
         # loss = loss / loss_accumulation_scalar
         action_loss.backward()
-
+        del transformer_embeddings
         if step_grad:
             if self.use_grad_clip:
                 torch.nn.utils.clip_grad_norm_(
@@ -514,3 +507,358 @@ class OctoRecollectTrainer(RecollectTrainer):
         # if isinstance(aux_loss, torch.Tensor):
         #     aux_loss = aux_loss.item()
         return action_loss.item(), loss_dict
+    
+    def _setup_eval_config(self, checkpoint_config: Config) -> Config:
+        r"""Sets up and returns a merged config for evaluation. Config
+            object saved from checkpoint is merged into config file specified
+            at evaluation time with the following overwrite priority:
+                  eval_opts > ckpt_opts > ckpt_cfg > eval_cfg
+            Evaluation should be done based on the training config (ckpt_cfg) and only EVAL cfg settings should be updated
+            If the saved config is outdated, only the eval config is returned.
+
+        Args:
+            checkpoint_config: saved config from checkpoint.
+
+        Returns:
+            Config: merged config for eval.
+        """
+
+        config = self.config.clone()
+        ckpt_cmd_opts = checkpoint_config.get('CMD_TRAILING_OPTS', [])
+        eval_cmd_opts = config.CMD_TRAILING_OPTS
+        eval_config = Config({'EVAL': config.EVAL})
+        eval_task_config = Config({'TASK_CONFIG': config.EVAL.EVAL_TASK_CONFIG})
+        eval_common_config = Config(config.EVAL.COMMON)
+
+        config.merge_from_other_cfg(checkpoint_config['config']) # Evaluation should be done based on the training config
+        config.merge_from_other_cfg(eval_config) # EVAL cfg settings should be updated
+        config.merge_from_other_cfg(eval_task_config) # EVAL_TASK cfg settings should be updated
+        config.merge_from_other_cfg(eval_common_config) # EVAL_TASK cfg settings should be updated
+        config.merge_from_list(ckpt_cmd_opts)
+        config.merge_from_list(eval_cmd_opts)
+
+        config.defrost()
+
+        config.TASK_CONFIG.SIMULATOR.AGENT_0.SENSORS = self.config.SENSORS
+        config.freeze()
+
+        return config
+
+    def _create_batch(self, obs, instructions):
+
+        rgb, depth, bert_tokens = [], [], []
+        for o in obs:
+            rgb.append(o['rgb'])
+            depth.append(o['depth'])
+            bert_tokens.append(o['rxr_instruction'][:self.octo_config.bert_max_tokens,:])
+
+        batch = dict()
+        batch["observation"] = dict()
+
+        # appending rgb and depth together and creating history dimension. Shape: (b, history=1, h, w, 4)
+        rgb = torch.from_numpy(np.stack(rgb, axis=0)).to(device=self.device, non_blocking=True)
+        depth = torch.from_numpy(np.stack(depth, axis=0)).to(device=self.device, non_blocking=True)
+        batch["observation"]['bert_tokens'] = torch.from_numpy(np.stack(bert_tokens, axis=0)).to(device=self.device, non_blocking=True)
+        
+        batch_size =rgb.shape[0]
+        # Pad mask for the whole batch with history=1
+        batch["observation"]['pad_mask'] = torch.ones((batch_size,1), dtype=bool).to(device=self.device, non_blocking=True)
+        batch["observation"]['pad_mask_dict'] = dict()
+        batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,1), dtype=bool).to(device=self.device, non_blocking=True)
+
+
+        if "t5" in self.octo_config.model.task_tokenizers.language.kwargs.encoder:
+            task = {"language_instruction": [], "pad_mask_dict": {"language_instruction": []}}
+            task["language_instruction"] = self.policy.text_processor.encode(instructions)
+            for k, v in task["language_instruction"].items():
+                task["language_instruction"][k] = v.to(device=self.device, non_blocking=True)
+        else:
+            task = {"pad_mask_dict": {"language_instruction": []}}
+        
+        task["pad_mask_dict"]["language_instruction"] = torch.ones(
+            len(instructions), dtype=bool
+        ).to(device=self.device, non_blocking=True)
+
+        observations_batch = apply_obs_transforms_batch(
+            {
+                'rgb': rgb,
+                'depth': depth,
+            },
+            self.obs_transforms,
+        )
+        batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1)
+        return batch, task
+
+    def eval(self, context=False) -> None:
+        r"""Main method of trainer evaluation. Calls _eval_checkpoint() that
+        is specified in Trainer class that inherits from BaseRLTrainer
+        or BaseILTrainer
+
+        Returns:
+            None
+        """
+        self.device = (
+            torch.device("cuda", self.config.EVAL.COMMON.TORCH_GPU_ID)
+            if torch.cuda.is_available()
+            else torch.device("cpu")
+        )
+
+        current_time = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+        if 'wandb' in self.config.EVAL.logger_type:
+            eval_dir = f'{self.config.CHECKPOINT_FOLDER}_evals/{current_time}/evals'
+            os.makedirs(eval_dir, exist_ok=True)
+            wandb_dir = f'{self.config.CHECKPOINT_FOLDER}_evals/{current_time}/wandb'
+            os.makedirs(wandb_dir, exist_ok=False)
+
+            self.wandb_run = wandb.init(project=self.config.EVAL.wandb_load.project, 
+                            entity=self.config.EVAL.wandb_load.entity, 
+                            group=self.config.EVAL.wandb_load.group,
+                            name=f'{self.config.EVAL.wandb_load.name}_{self.config.EVAL.SPLIT}_{current_time}',
+                            dir=wandb_dir)
+            wandb.config.update({"run_path": self.config.EVAL.wandb_load.run_path,
+                                  "run_file": self.config.EVAL.wandb_load.file})
+            tb_writer = None
+
+        if 'tb' in self.config.EVAL.logger_type:
+            tb_dir = f'{self.config.EVAL.EVAL_LOG_DIR}/tb_logs'
+            os.makedirs(tb_dir, exist_ok=True)
+            eval_dir = f'{self.config.EVAL.EVAL_LOG_DIR}/evals'
+            os.makedirs(eval_dir, exist_ok=True)
+
+            tb_writer = TensorboardWriter(
+                tb_dir,
+                flush_secs=self.flush_secs,
+            )
+            assert (
+                len(self.config.EVAL.EVAL_LOG_DIR) > 0
+            ), "Must specify a tensorboard directory for logging"
+        
+        if context:
+            self._eval_checkpoint_context(
+                self.config.EVAL.EVAL_CKPT_PATH_DIR,
+                tb_writer,
+                checkpoint_index=ckpt_idx,
+            )
+        else:
+            self._eval_checkpoint(
+                tb_writer,
+                eval_dir,
+            )
+
+    def _eval_checkpoint(
+        self,
+        tb_writer: TensorboardWriter,
+        eval_dir,
+    ) -> None:
+        """Evaluates a single checkpoint.
+
+        Args:
+            writer: tensorboard writer object. None if using wandb
+        """
+        if tb_writer is None:
+            logger.info(f"Run path: {self.config.EVAL.wandb_load.run_path}. File: {self.config.EVAL.wandb_load.file}")
+            ckpt_file = wandb.restore(str(self.config.EVAL.wandb_load.file), run_path=self.config.EVAL.wandb_load.run_path,
+                root=eval_dir, replace=False)
+            ckpt = torch.load(ckpt_file.name)
+        else:
+            logger.info(f"checkpoint_path: {self.config.EVAL.EVAL_CKPT_PATH_DIR}")
+            ckpt = self.load_checkpoint(self.config.EVAL.EVAL_CKPT_PATH_DIR, map_location='cpu')
+            
+        if self.config.EVAL.USE_CKPT_CONFIG:
+            config = self.config.clone()
+            config = self._setup_eval_config(ckpt)
+
+        self.obs_transforms = get_active_obs_transforms(config)
+
+        split = config.EVAL.SPLIT
+        config.defrost()
+        config.TASK_CONFIG.DATASET.SPLIT = split
+        config.TASK_CONFIG.DATASET.ROLES = ["guide"]
+        config.TASK_CONFIG.DATASET.LANGUAGES = config.EVAL.LANGUAGES
+        config.TASK_CONFIG.TASK.NDTW.SPLIT = split
+        config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.SHUFFLE = False
+        config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.MAX_SCENE_REPEAT_STEPS = (
+            -1
+        )
+        config.use_pbar = not is_slurm_batch_job()
+
+        if config.EVAL.SAVE_VIDEO:
+            video_dir = f'{eval_dir}/videos_ckpt/{split}_{config.TASK_CONFIG.TASK.SUCCESS_DISTANCE}'
+            config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
+
+        config.freeze()
+
+        if config.EVAL.SAVE_RESULTS:
+            fname = os.path.join(
+                eval_dir,
+                f"stats_ckpt_{split}_SD{config.TASK_CONFIG.TASK.SUCCESS_DISTANCE}.json",
+            )
+            if os.path.exists(fname):
+                logger.info("skipping -- evaluation exists.")
+                return
+
+        envs = construct_envs_auto_reset_false(
+            config, get_env_class(config.ENV_NAME)
+        )
+
+        self._initialize_policy(
+            config,
+            load_from_ckpt=True,
+            eval_dir=eval_dir,
+        )
+        self.policy.eval()
+
+        observations = envs.reset()
+
+        current_episodes = envs.current_episodes()
+        instructions = [current_episodes[i].instruction for i in range(envs.num_envs)]
+
+        observations = extract_instruction_tokens(
+            observations, self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID
+        )
+        
+        batch, task = self._create_batch(observations, instructions)
+
+        stats_episodes = {}
+        rgb_frames = [[] for _ in range(envs.num_envs)]
+
+        num_eps = sum(envs.number_of_episodes)
+        if config.EVAL.EPISODE_COUNT > -1:
+            num_eps = min(config.EVAL.EPISODE_COUNT, num_eps)
+
+        pbar = tqdm.tqdm(total=num_eps) if config.use_pbar else None
+        log_str = (
+            f"[Ckpt:]"
+            " [Episodes evaluated: {evaluated}/{total}]"
+            " [Time elapsed (s): {time}]"
+        )
+        start_time = time.time()
+
+        actions_all_envs = [[] for _ in range(envs.num_envs)]
+        while envs.num_envs > 0 and len(stats_episodes) < num_eps:
+            current_episodes = envs.current_episodes()
+            # import ipdb; ipdb.set_trace()
+            with torch.no_grad():
+                actions = self.policy.sample_actions(
+                    batch["observation"],
+                    task,
+                    batch["observation"]["pad_mask"],
+                    argmax = True,
+                )
+
+            outputs = envs.step([a[0].item() for a in actions])
+            observations, _, dones, infos = [list(x) for x in zip(*outputs)]
+
+            # reset envs and observations if necessary
+            for i in range(envs.num_envs):
+                if config.EVAL.SAVE_VIDEO:
+                    frame = observations_to_image(observations[i], infos[i])
+                    _text = text_to_append(current_episodes[i].instruction)
+                    frame = append_text_to_image(frame, _text)
+                    rgb_frames[i].append(frame)
+                    actions_all_envs[i].append(actions[i][0].item())
+
+                if not dones[i]:
+                    continue
+
+                ep_id = current_episodes[i].episode_id
+                stats_episodes[ep_id] = infos[i]
+                
+                observations[i] = envs.reset_at(i)[0]
+
+                if config.use_pbar:
+                    pbar.update()
+                else:
+                    logger.info(
+                        log_str.format(
+                            evaluated=len(stats_episodes),
+                            total=num_eps,
+                            time=round(time.time() - start_time),
+                        )
+                    )
+
+                if config.EVAL.SAVE_VIDEO:
+                    generate_video(
+                        video_option=config.EVAL.VIDEO_SAVE_LOC,
+                        video_dir=video_dir,
+                        images=rgb_frames[i],
+                        episode_id=ep_id,
+                        checkpoint_idx=0,
+                        metrics={"spl": stats_episodes[ep_id]["spl_rxr"]},
+                        tb_writer=tb_writer,
+                    )
+                    del stats_episodes[ep_id]["top_down_map_vlnce"]
+                    rgb_frames[i] = []
+                actions_all_envs = [[] for _ in range(envs.num_envs)]
+
+                if 'wandb' in self.config.EVAL.logger_type:
+                    log_dict = {}
+                    for m in stats_episodes[ep_id].keys():
+                        if 'agent' in m:
+                            continue
+                        else:
+                            log_dict[m] = stats_episodes[ep_id][m]
+                    log_dict["episode_id"] = int(ep_id)
+                    wandb.log(log_dict)
+
+
+            observations = extract_instruction_tokens(
+                observations,
+                self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
+            )
+
+            instructions = [current_episodes[i].instruction for i in range(envs.num_envs)]
+            batch, task = self._create_batch(observations, instructions)
+
+            envs_to_pause = []
+            next_episodes = envs.current_episodes()
+
+            for i in range(envs.num_envs):
+                if next_episodes[i].episode_id in stats_episodes:
+                    envs_to_pause.append(i)
+
+            # (
+            #     envs,
+            #     _,
+            #     _,
+            #     _,
+            #     batch,
+            #     rgb_frames,
+            # ) = self._pause_envs(
+            #     envs_to_pause,
+            #     envs,
+            #     None,
+            #     None,
+            #     None,
+            #     batch,
+            #     rgb_frames,
+            # )
+
+        envs.close()
+        if config.use_pbar:
+            pbar.close()
+
+        aggregated_stats = {}
+        num_episodes = len(stats_episodes)
+        for k in next(iter(stats_episodes.values())).keys():
+            if k == 'agent_rotation' or k == 'agent_position':
+                continue
+            else:
+                aggregated_stats[k] = (
+                    np.sum(v[k] for v in stats_episodes.values()) / num_episodes
+                )
+        
+        if 'wandb' in self.config.EVAL.logger_type:
+            log_dict = {}
+            for k in aggregated_stats.keys():
+                log_dict[f'{k}_aggr'] = aggregated_stats[k]
+            wandb.log(log_dict)
+
+        if config.EVAL.SAVE_RESULTS:
+            with open(fname, "w") as f:
+                json.dump(aggregated_stats, f, indent=4)
+
+        logger.info(f"Episodes evaluated: {num_episodes}")
+        for k, v in aggregated_stats.items():
+            logger.info(f"{k}: {v:.6f}")
+            tb_writer.add_scalar(f"eval_{split}_{k}", v, 0)

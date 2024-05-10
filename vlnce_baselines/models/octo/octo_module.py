@@ -212,7 +212,7 @@ class OctoTransformer(nn.Module):
             # task_tokens shape is (batch, n_tokens, token_embedding_size)
 
             # Add positional embedding
-            embedding = self.task_pos_emb[i](torch.arange(self.max_tokens).to(self.device)) #TODO(saumya): device?
+            embedding = self.task_pos_emb[i](torch.arange(self.max_tokens).to(self.device))
             task_tokens += torch.broadcast_to(embedding, task_tokens.shape)
 
             all_prefix_groups.append(

@@ -198,9 +198,12 @@ class BaseVLNCETrainer(BaseILTrainer):
                 envs.pause_at(idx)
 
             # indexing along the batch dimensions
-            recurrent_hidden_states = recurrent_hidden_states[state_index]
-            not_done_masks = not_done_masks[state_index]
-            prev_actions = prev_actions[state_index]
+            if recurrent_hidden_states is not None:
+                recurrent_hidden_states = recurrent_hidden_states[state_index]
+            if not_done_masks is not None:
+                not_done_masks = not_done_masks[state_index]
+            if prev_actions is not None:
+                prev_actions = prev_actions[state_index]
 
             for k, v in batch.items():
                 batch[k] = v[state_index]
