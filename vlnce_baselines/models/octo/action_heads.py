@@ -11,6 +11,7 @@ from vlnce_baselines.models.octo.base import TokenGroup
 from vlnce_baselines.models.octo.diffusion import cosine_beta_schedule, create_diffusion_model
 from vlnce_baselines.models.octo.tokenizers import BinTokenizer
 from vlnce_baselines.models.octo.transformer import MAPHead
+from vlnce_baselines.common.utils import bits2int
 
 # class ActionHead(ABC):
 #     """Action prediction modules that take in the transformer token outputs and predict actions.
@@ -476,8 +477,11 @@ class DiffusionActionHead(nn.Module):
         use_map: bool = False,
         pred_horizon: int = 1,
         action_dim: int = 7,
+        n_classes: int = 6,
         max_action: float = 5.0,
-        prediction_type: str = 'noise'
+        min_action: float = -5.0,
+        prediction_type: str = 'noise',
+        action_repr: str = 'discrete',
         loss_type: str = "mse",
         embedding_size: int = 384,
         # diffusion-specific config with sane defaults
@@ -495,6 +499,8 @@ class DiffusionActionHead(nn.Module):
         self.pred_horizon = pred_horizon
         self.action_dim = action_dim
         self.max_action = max_action
+        self.min_action = min_action
+        self.action_repr = action_repr
         self.prediction_type = prediction_type
         self.loss_type = loss_type
         self.embedding_size = embedding_size
@@ -528,6 +534,9 @@ class DiffusionActionHead(nn.Module):
         self.alpha_hats = torch.tensor(
             [torch.prod(self.alphas[: i + 1]) for i in range(self.diffusion_steps)]
         ).to(self.device)
+
+        # if 'bits' in self.action_repr:
+        #     self.bits = int2bits(tf.arange())
 
         # self.action_tokenizer = BinTokenizer(
         #     n_bins=self.action_dim,
@@ -590,9 +599,9 @@ class DiffusionActionHead(nn.Module):
         actions_chunked = actions_chunked[:, :window_size]
         # fold action_dim and pred_horizon into one dimension
         actions_flat = rearrange(actions_chunked, "b w p a -> b w (p a)")
-        actions_flat = torch.clip(actions_flat, -self.max_action, self.max_action)
+        actions_flat = torch.clip(actions_flat, self.min_action, self.max_action)
         
-        time = torch.randint(0, self.diffusion_steps, (batch_size, window_size, 1)).to(self.device)
+        time = torch.randint(0, self.diffusion_steps, (batch_size, window_size, 1)).to(self.device) # TODO(saumya): why is window dimension added to the actions
         noise = torch.randn(actions_flat.shape).to(self.device)
 
         alpha_hat = self.alpha_hats[time]
@@ -604,23 +613,20 @@ class DiffusionActionHead(nn.Module):
             transformer_outputs, train=train, time=time, noisy_actions=noisy_actions
         )
 
-        if 'mse' in self.loss_type:
-            loss, metrics = continuous_loss(
-                pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
-            )
-            metrics["mse_loss"] = metrics["mse_loss"] * self.action_dim
-        elif 'l1' in self.loss_type:
-            loss, metrics = continuous_loss(
-                pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
-            )
-            metrics["l1_loss"] = metrics["l1_loss"] * self.action_dim
+        if 'mse' in self.loss_type or 'l1' in self.loss_type:
+            if 'noise' in self.prediction_type:
+                loss, metrics = continuous_loss(
+                    pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
+                )
+                metrics[f"{self.loss_type}_loss"] = metrics[f"{self.loss_type}_loss"] * self.action_dim
         elif 'softmax_cross_ent' in self.loss_type:
-            loss, metrics = softmax_cross_entropy_loss(
-                pred_eps,
-                noise,
-                pad_mask,
-            )
-            metrics["cross_ent_loss"] = metrics["cross_ent_loss"] * self.action_dim
+            if 'noise' in self.prediction_type:
+                loss, metrics = softmax_cross_entropy_loss(
+                    pred_eps,
+                    noise,
+                    pad_mask,
+                ) # TODO(saumya): Fix this
+                metrics["cross_ent_loss"] = metrics["cross_ent_loss"] * self.action_dim
         else:
             raise NotImplementedError("Loss type not defined.")
 
@@ -647,6 +653,7 @@ class DiffusionActionHead(nn.Module):
     ) -> torch.Tensor:
         """Convenience methods for predicting actions for the final timestep in the window."""
         def scan_fn(current_x, time):
+            
             input_time = torch.broadcast_to(time, (*current_x.shape[:-1], 1))
 
             eps_pred = self(transformer_outputs, input_time, current_x, train=train)
@@ -658,7 +665,7 @@ class DiffusionActionHead(nn.Module):
             z = torch.randn(current_x.shape).to(device=device)
             current_x = current_x + (time > 0) * (torch.sqrt(self.betas[time]) * z)
 
-            current_x = torch.clip(current_x, -self.max_action, self.max_action)
+            current_x = torch.clip(current_x, self.min_action, self.max_action)
 
             return current_x
 
@@ -666,29 +673,34 @@ class DiffusionActionHead(nn.Module):
             batch_size, window_size = transformer_outputs[
                 self.readout_key
             ].tokens.shape[:2]
+            if 'noise' in self.prediction_type:
+                actions_flat = torch.randn((batch_size, window_size, self.pred_horizon * self.action_dim)).to(device=device)
+                actions_flat = torch.clip(actions_flat, self.min_action, self.max_action)
 
-            actions_flat = torch.randn((batch_size, window_size, self.pred_horizon * self.action_dim)).to(device=device)
-            steps = torch.arange(self.diffusion_steps - 1, -1, -1).to(device=device)
-            for x in steps:
-                actions_flat = scan_fn(actions_flat, x)
+                steps = torch.arange(self.diffusion_steps - 1, -1, -1).to(device=device)
+                for x in steps:
+                    actions_flat = scan_fn(actions_flat, x)
 
-            actions = rearrange(
-                actions_flat,
-                "b w (p a) -> b w p a",
-                p=self.pred_horizon,
-                a=self.action_dim,
-            )
-
-            if argmax:
-                action_tokens = torch.argmax(actions, axis=-1).type(torch.int32)
-                action_tokens = torch.broadcast_to(
-                    action_tokens, sample_shape + action_tokens.shape
+                actions = rearrange(
+                    actions_flat,
+                    "b w (p a) -> b w p a",
+                    p=self.pred_horizon,
+                    a=self.action_dim,
                 )
-            else:
-                dist = torch.distributions.Categorical(logits=actions / temperature)
-                action_tokens = dist.sample(sample_shape=sample_shape).type(
-                    torch.int32
-                )
+                if 'bits' in self.action_repr:
+                    bits = actions > 0
+                    action_tokens = bits2int(bits)
+                    action_tokens = torch.clip(action_tokens, 0, 5)
+            # if argmax:
+            #     action_tokens = torch.argmax(actions, axis=-1).type(torch.int32)
+            #     action_tokens = torch.broadcast_to(
+            #         action_tokens, sample_shape + action_tokens.shape
+            #     )
+            # else:
+            #     dist = torch.distributions.Categorical(logits=actions / temperature)
+            #     action_tokens = dist.sample(sample_shape=sample_shape).type(
+            #         torch.int32
+            #     )
             # return self.action_tokenizer.decode(action_tokens)[:,-1] # only get the last timestep in the window
             return action_tokens[:,-1]
 

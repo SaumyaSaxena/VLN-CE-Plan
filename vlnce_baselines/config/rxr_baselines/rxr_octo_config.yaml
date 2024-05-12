@@ -111,8 +111,11 @@ model:
     action:
       args: []
       kwargs:
-        action_dim: 6
-        max_action: 5
+        action_dim: 6 # Will get updated later
+        action_repr: 'discrete' #'one-hot', 'bits' # Will get updated later
+        n_classes: 6 # Will get updated later
+        max_action: 5 # Will get updated later
+        min_action: -5 # Will get updated later
         pred_horizon: ${pred_horizon}
         readout_key: readout_action
         use_map: false

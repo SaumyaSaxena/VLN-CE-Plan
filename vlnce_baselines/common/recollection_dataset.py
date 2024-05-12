@@ -18,7 +18,7 @@ from habitat_baselines.common.obs_transformers import (
 
 from habitat_extensions.task import ALL_ROLES_MASK, RxRVLNCEDatasetV1
 from vlnce_baselines.common.env_utils import construct_envs
-from vlnce_baselines.common.utils import extract_instruction_tokens
+from vlnce_baselines.common.utils import extract_instruction_tokens, int2bits
 
 from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_batch,
@@ -278,9 +278,10 @@ class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
 
 class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
     def __init__(self, config: Config, octo_config):
-        super().__init__(config)
         self.octo_config = octo_config
-
+        self.action_repr = config.IL.OCTO_TRAINER.action_repr
+        super().__init__(config)
+        
     def initialize_sims(self):
         config = self.config.clone()
         config.defrost()
@@ -306,13 +307,20 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
             self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
         )
 
-        self.one_hot_actions = {} 
+        self.actions = {} 
         for ep_id in self.trajectories.keys():
             trajectory = np.array(self.trajectories[ep_id])
-            one_hot_trajectory = np.zeros((trajectory.shape[0],6), dtype=np.float32)
-            one_hot_trajectory[np.arange(trajectory.shape[0]), trajectory[:,1]] = 1
-            self.one_hot_actions[ep_id] = one_hot_trajectory
-
+            if 'one-hot' in  self.action_repr:
+                one_hot_trajectory = np.zeros((trajectory.shape[0],6), dtype=np.float32)
+                one_hot_trajectory[np.arange(trajectory.shape[0]), trajectory[:,1]] = 1
+                self.actions[ep_id] = one_hot_trajectory
+            elif 'discrete' in  self.action_repr:
+                self.actions[ep_id] = trajectory[:,1]
+            elif 'bits' in  self.action_repr:
+                nbits = self.config.IL.OCTO_TRAINER.nbits
+                self.actions[ep_id] = (int2bits(trajectory[:,1], nbits) * 2 - 1) * self.config.IL.OCTO_TRAINER.scale_bits
+            else:
+                raise NotImplementedError('action representation not defined')
 
         for i, ep in enumerate(self.envs.current_episodes()):
             path_step = self.trajectories[ep.episode_id][0]
@@ -322,7 +330,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
                     observations[i],
                     path_step[0],  # prev_action
                     path_step[2],  # oracle_action
-                    self.one_hot_actions[ep.episode_id][0],  # oracle_action
+                    self.actions[ep.episode_id][0],  # oracle_action
                     ep.instruction.instruction_text
                 )
             )
@@ -386,7 +394,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
                         observations[i],
                         path_step[0],  # prev_action
                         path_step[2],  # oracle_action
-                        self.one_hot_actions[current_episodes[i].episode_id][self.env_step[i]],
+                        self.actions[current_episodes[i].episode_id][self.env_step[i]],
                         current_episodes[i].instruction.instruction_text
                     )
                 )
@@ -421,7 +429,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
 
         prev_actions = torch.from_numpy(np.copy(prev_actions))
         oracle_actions = torch.from_numpy(np.copy(oracle_actions))
-        one_hot_action = torch.from_numpy(np.copy(one_hot_action))
+        one_hot_action = torch.from_numpy(np.copy(one_hot_action)).to(torch.float32)
 
         inflections = torch.cat(
             [

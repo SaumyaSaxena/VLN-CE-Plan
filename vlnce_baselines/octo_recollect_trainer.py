@@ -71,7 +71,7 @@ class MyCollator(object):
         observations_batch = list(transposed[0])
         prev_actions_batch = list(transposed[1])
         corrected_actions_batch = list(transposed[2])
-        one_hot_actions = list(transposed[3])
+        actions_for_training = list(transposed[3])
         # weights_batch = list(transposed[4])
         instructions_batch = list(transposed[5])
         
@@ -91,7 +91,7 @@ class MyCollator(object):
             )
 
         corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
-        one_hot_actions = torch.cat(one_hot_actions, dim=0)
+        actions_for_training = torch.cat(actions_for_training, dim=0)
 
         final_obs_batch = dict()
         final_obs_batch["observation"] = dict()
@@ -109,7 +109,7 @@ class MyCollator(object):
         final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,1), dtype=bool)
 
         # final_obs_batch['task'] = tasks_batch
-        final_obs_batch['action'] = one_hot_actions.unsqueeze(1)
+        final_obs_batch['action'] = actions_for_training.unsqueeze(1)
 
         instructions_batch_flat = []
         for row in instructions_batch:
@@ -169,13 +169,21 @@ class OctoRecollectTrainer(RecollectTrainer):
         else:
             self.octo_config = OmegaConf.load(config['OCTO_CONFIG_PATH'])
 
+        self.octo_config.model.heads.action.kwargs.action_repr = config.IL.OCTO_TRAINER.action_repr
         if 'discrete' in config.IL.OCTO_TRAINER.action_repr:
             self.octo_config.model.heads.action.kwargs.action_dim = 1
+            self.octo_config.model.heads.action.kwargs.max_action = 5
+            self.octo_config.model.heads.action.kwargs.min_action = 0
         if 'one-hot' in config.IL.OCTO_TRAINER.action_repr:
             self.octo_config.model.heads.action.kwargs.action_dim = 6
+            self.octo_config.model.heads.action.kwargs.max_action = 1
+            self.octo_config.model.heads.action.kwargs.min_action = 0
         if 'bits' in config.IL.OCTO_TRAINER.action_repr:
-            self.octo_config.model.heads.action.kwargs.action_dim = 6
-
+            nbits = int(np.ceil(np.log2(6)))
+            self.octo_config.model.heads.action.kwargs.action_dim = nbits
+            self.octo_config.model.heads.action.kwargs.n_classes = 6
+            self.octo_config.model.heads.action.kwargs.max_action = self.config.IL.OCTO_TRAINER.scale_bits
+            self.octo_config.model.heads.action.kwargs.min_action = -self.config.IL.OCTO_TRAINER.scale_bits
 
         example_batch, dataset_statistics = get_octo_data(self.octo_config.pretrained_ckpt_path)
         self.policy = OctoPolicy.from_config(self.octo_config, example_batch, dataset_statistics, self.device)
@@ -857,8 +865,9 @@ class OctoRecollectTrainer(RecollectTrainer):
         if config.EVAL.SAVE_RESULTS:
             with open(fname, "w") as f:
                 json.dump(aggregated_stats, f, indent=4)
-
-        logger.info(f"Episodes evaluated: {num_episodes}")
-        for k, v in aggregated_stats.items():
-            logger.info(f"{k}: {v:.6f}")
-            tb_writer.add_scalar(f"eval_{split}_{k}", v, 0)
+        
+        if 'tb' in self.config.EVAL.logger_type:
+            logger.info(f"Episodes evaluated: {num_episodes}")
+            for k, v in aggregated_stats.items():
+                logger.info(f"{k}: {v:.6f}")
+                tb_writer.add_scalar(f"eval_{split}_{k}", v, 0)
