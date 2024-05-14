@@ -310,14 +310,14 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
         self.actions = {} 
         for ep_id in self.trajectories.keys():
             trajectory = np.array(self.trajectories[ep_id])
-            if 'one-hot' in  self.action_repr:
+            if 'one-hot' in self.action_repr:
                 one_hot_trajectory = np.zeros((trajectory.shape[0],6), dtype=np.float32)
                 one_hot_trajectory[np.arange(trajectory.shape[0]), trajectory[:,1]] = 1
                 self.actions[ep_id] = one_hot_trajectory
-            elif 'discrete' in  self.action_repr:
+            elif 'discrete' in self.action_repr:
                 self.actions[ep_id] = trajectory[:,1]
             elif 'bits' in  self.action_repr:
-                nbits = self.config.IL.OCTO_TRAINER.nbits
+                nbits = self.octo_config.model.heads.action.kwargs.action_dim
                 self.actions[ep_id] = (int2bits(trajectory[:,1], nbits) * 2 - 1) * self.config.IL.OCTO_TRAINER.scale_bits
             else:
                 raise NotImplementedError('action representation not defined')

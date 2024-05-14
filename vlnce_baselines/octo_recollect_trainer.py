@@ -172,10 +172,12 @@ class OctoRecollectTrainer(RecollectTrainer):
         self.octo_config.model.heads.action.kwargs.action_repr = config.IL.OCTO_TRAINER.action_repr
         if 'discrete' in config.IL.OCTO_TRAINER.action_repr:
             self.octo_config.model.heads.action.kwargs.action_dim = 1
+            self.octo_config.model.heads.action.kwargs.n_classes = 6
             self.octo_config.model.heads.action.kwargs.max_action = 5
             self.octo_config.model.heads.action.kwargs.min_action = 0
         if 'one-hot' in config.IL.OCTO_TRAINER.action_repr:
             self.octo_config.model.heads.action.kwargs.action_dim = 6
+            self.octo_config.model.heads.action.kwargs.n_classes = 6
             self.octo_config.model.heads.action.kwargs.max_action = 1
             self.octo_config.model.heads.action.kwargs.min_action = 0
         if 'bits' in config.IL.OCTO_TRAINER.action_repr:

@@ -1,7 +1,7 @@
 BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_task.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
-TORCH_GPU_ID: 2
+TORCH_GPU_ID: 0
 NUM_ENVIRONMENTS: 5 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en
 CHECKPOINT_FOLDER: outputs/rxr_octo_en
@@ -12,7 +12,7 @@ wandb:
   entity: iam-lab
   group: octo
   project: vlnce_plan
-  name: octo_full_instr_beta_1_0_bits_pred_noise_mse_loss
+  name: octo_full_instr_beta_1_0_bits_pred_softmax_PRED_NOISE_mse_loss
   saver:
     upload: True
     save_top_k: 5
@@ -30,31 +30,31 @@ EVAL:
   SAVE_RESULTS: False
   logger_type: 'wandb' # 'wandb', 'tb'
   wandb_load:
-    run_path: 'iam-lab/vlnce_plan/tbm0s5v0'
-    file: checkpoints/ckpt_epoch_1_step_19996_action_loss_0.012.pth
+    run_path: 'iam-lab/vlnce_plan/0cbya9f4'
+    file: checkpoints/ckpt_epoch_5_step_59988_action_loss_0.668.pth
     entity: iam-lab
     project: vlnce_plan_eval
     group: octo
-    name: full_instr_1_0_bits_pred_noise_mse_loss
+    name: full_instr_1_0_bits_softmax_pred_action_mse_loss_epoch5
   tb_load:
     EVAL_CKPT_PATH_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57/checkpoints/ckpt.14.pth # If this is a directory, evaluate all checkpoints. Else evaluate the specified checkpoint.pth
     EVAL_LOG_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57
 
   EVAL_TASK_CONFIG:
     TASK:
-      SUCCESS_DISTANCE: 2.0
+      SUCCESS_DISTANCE: 3.0
       SUCCESS:
-        SUCCESS_DISTANCE: 2.0
+        SUCCESS_DISTANCE: 3.0
       ORACLE_SUCCESS:
-        SUCCESS_DISTANCE: 2.0
+        SUCCESS_DISTANCE: 3.0
       NDTW:
-        SUCCESS_DISTANCE: 2.0
+        SUCCESS_DISTANCE: 3.0
     ENVIRONMENT:
       MAX_EPISODE_STEPS: 300
   COMMON:
-    SIMULATOR_GPU_IDS: [2] # Evals run on these GPUs
+    SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
     NUM_ENVIRONMENTS: 10 # Number of envs per GPU
-    TORCH_GPU_ID: 2
+    TORCH_GPU_ID: 0
 
 MODEL:
   policy_name: OctoPolicy
@@ -81,8 +81,7 @@ IL:
 
   OCTO_TRAINER:
     action_repr: 'bits' #'one-hot', 'bits'
-    nbits: 4 # used when action_repr=bits
-    scale_bits: 1 # used when action_repr=bits
+    scale_bits: 1.0 # used when action_repr=bits
     preload_size: 30
     preload_trajectories_file: False
     trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories.json.gz

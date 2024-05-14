@@ -184,7 +184,7 @@ def int2bits(x, n, out_dtype=None):
             x = x.type(out_dtype)
     else:
         x = x.astype(np.uint8)
-        x = np.unpackbits(x[..., np.newaxis], axis=-1, count=n-8, bitorder='little') # this way it behaves like torch implementation
+        x = np.unpackbits(x[..., np.newaxis], axis=-1, count=n-8, bitorder='little').astype(int) # this way it behaves like torch implementation
     return x
 
 def bits2int(x, out_dtype=torch.int32):

@@ -13,7 +13,6 @@ from torch import Tensor
 
 from vlnce_baselines.common.utils import single_frame_box_shape
 
-
 class VlnResnetDepthEncoder(nn.Module):
     def __init__(
         self,

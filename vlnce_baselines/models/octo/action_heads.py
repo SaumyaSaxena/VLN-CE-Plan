@@ -5,46 +5,14 @@ from einops import rearrange
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 
 from vlnce_baselines.models.octo.base import TokenGroup
 from vlnce_baselines.models.octo.diffusion import cosine_beta_schedule, create_diffusion_model
 from vlnce_baselines.models.octo.tokenizers import BinTokenizer
 from vlnce_baselines.models.octo.transformer import MAPHead
-from vlnce_baselines.common.utils import bits2int
-
-# class ActionHead(ABC):
-#     """Action prediction modules that take in the transformer token outputs and predict actions.
-
-#     Each action head here does chunked action prediction: i.e. at every timestep,
-#     it tries to predict the next `pred_horizon` actions into the future from that timestep.
-#     Setting `pred_horizon=1` corresponds to the typical action prediction setup.
-#     """
-
-#     @abstractmethod
-#     def loss(
-#         self,
-#         transformer_outputs: Dict[str, TokenGroup],
-#         actions: ArrayLike,
-#         pad_mask: ArrayLike,
-#         train: bool = True,
-#     ) -> Tuple[Array, Dict[str, Array]]:
-#         raise NotImplementedError
-
-#     @abstractmethod
-#     def predict_action(
-#         self,
-#         transformer_outputs: Dict[str, TokenGroup],
-#         argmax: bool = False,
-#         sample_shape: Tuple[int, ...] = (),
-#         rng: Optional[PRNGKey] = None,
-#         temperature: float = 1.0,
-#         train: bool = False,
-#     ) -> Array:
-#         """Predict the action for the last timestep in the window. Returns shape
-#         (*sample_shape, batch_size, pred_horizon, action_dim).
-#         """
-#         raise NotImplementedError
+from vlnce_baselines.common.utils import bits2int, int2bits
 
 
 def masked_mean(x, mask):
@@ -93,9 +61,11 @@ def _check_action_window_size(actions, window_size, pred_horizon):
 
 def continuous_loss(
     pred_value,
-    ground_truth_value,
+    noise,
+    actions_flat,
     mask,
     loss_type: str = "mse",
+    pred_type='noise',
 ):
     """
     Args:
@@ -103,15 +73,23 @@ def continuous_loss(
         ground_truth_value: continuous values w/ shape (batch_dims...)
         mask: broadcastable to ground_truth
     """
-    if loss_type == "mse":
-        loss = torch.square(pred_value - ground_truth_value)
-    elif loss_type == "l1":
-        loss = torch.abs(pred_value - ground_truth_value)
-    else:
-        raise ValueError(f"Invalid loss type: {loss_type}")
-
+    if 'noise' in pred_type:
+        if loss_type == "mse":
+            loss = torch.square(pred_value - noise)
+        elif loss_type == "l1":
+            loss = torch.abs(pred_value - noise)
+        else:
+            raise ValueError(f"Invalid loss type: {loss_type}")
+    
+    if 'action' in pred_type:
+        if loss_type == "mse":
+            loss = torch.square(pred_value - actions_flat)
+        elif loss_type == "l1":
+            loss = torch.abs(pred_value - actions_flat)
+        else:
+            raise ValueError(f"Invalid loss type: {loss_type}")
+    
     loss = masked_mean(loss, mask)
-
     return loss, {
         f"{loss_type}_loss": loss
     }
@@ -152,9 +130,12 @@ def discrete_loss(
     }
 
 def softmax_cross_entropy_loss(
-    logits,
-    ground_truth_value,
+    pred_logits,
+    noise,
+    actions_flat,
     mask,
+    pred_type='action',
+    action_repr='bits',
 ):
     """
     Args:
@@ -162,303 +143,45 @@ def softmax_cross_entropy_loss(
         ground_truth_value: continuous values in w/ shape (batch_dims...)
         mask: broadcastable to ground_truth_value
     """
-    labels = torch.argmax(ground_truth_value, axis=-1)
-    # labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
+    if 'action' in pred_type:
+        if 'bits' in action_repr: # actions_flat is in bits
+            labels = bits2int(actions_flat > 0)
+        else:
+            labels = torch.argmax(actions_flat, axis=-1)
+        # labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
 
-    cross_ent_loss = torch.nn.CrossEntropyLoss(reduction='none')
+        cross_ent_loss = torch.nn.CrossEntropyLoss(reduction='none')
 
-    logits_flat = rearrange(
-        logits,
-        "b w a -> (b w) a"
-    )
+        logits_flat = rearrange(
+            pred_logits,
+            "b w a -> (b w) a"
+        )
 
-    labels_flat = rearrange(
-        labels,
-        "b w -> (b w)"
-    )
+        labels_flat = rearrange(
+            labels,
+            "b w -> (b w)"
+        )
+        loss = cross_ent_loss(logits_flat, labels_flat) 
+        loss = rearrange(
+            loss,
+            "(b w) -> b w",
+            b = labels.shape[0],
+            w = labels.shape[1]
+        )
 
-    loss = cross_ent_loss(logits_flat, labels_flat) 
-    loss = rearrange(
-        loss,
-        "(b w) -> b w",
-        b = labels.shape[0],
-        w = labels.shape[1]
-    )
+        loss = masked_mean(loss, mask)
 
-    loss = masked_mean(loss, mask)
+        # compute accuracy between predicted actions and target actions
+        pred_label = torch.argmax(pred_logits, axis=-1)
+        accuracy = pred_label == labels
+        accuracy = masked_mean(accuracy, mask)
 
-    # compute accuracy between predicted actions and target actions
-    pred_label = torch.argmax(logits, axis=-1)
-    accuracy = pred_label == labels
-    accuracy = masked_mean(accuracy, mask)
-
-    mse = torch.square(logits - ground_truth_value)
-    mse = masked_mean(mse, mask[..., None])
-    return loss, {
-        "cross_ent_loss": loss,
-        "mse": mse,
-        "accuracy": accuracy,
-    }
-
-# class ContinuousActionHead(nn.Module, ActionHead):
-#     """Predicts continuous actions (as opposed to discretized).
-
-#     Continuous actions are predicted by tanh squashing the model output to [-max_action, max_action], and then
-#     optimized using a standard regression loss.
-
-#     You may create an embedding by either mean-pooling across tokens (use_map=False) or using multi-head
-#     attention pooling (use_map=True). It is recommended to use MAP when decoding from the observation token
-#     stream.
-#     """
-
-#     readout_key: str
-#     use_map: bool = False
-#     pred_horizon: int = 1
-#     action_dim: int = 7
-#     max_action: float = 5.0
-#     loss_type: str = "mse"
-
-#     def setup(self):
-#         if self.use_map:
-#             self.map_head = MAPHead()
-#         self.mean_proj = nn.Dense(self.pred_horizon * self.action_dim)
-
-#     def __call__(
-#         self, transformer_outputs: Dict[str, TokenGroup], train: bool = True
-#     ) -> jax.Array:
-#         """
-#         Returns:
-#             mean: Predicted actions w/ shape (batch_size, window_size, pred_horizon, action_dim)
-#         """
-#         token_group = transformer_outputs[self.readout_key]
-#         assert token_group.tokens.ndim == 4, (
-#             f"Expected token_group.tokens to have shape (batch_size, window_size, num_tokens, embedding_size), "
-#             f"but got shape {token_group.tokens.shape}"
-#         )
-#         if self.use_map:  # Multi-head attention pooling
-#             embeddings = self.map_head(token_group, train=train)[:, :, 0]
-#         else:  # mean pooling
-#             embeddings = token_group.tokens.mean(axis=-2)
-#         # Now, embeddings is (batch_size, window_size, embedding_size)
-
-#         mean = self.mean_proj(embeddings)
-#         mean = rearrange(
-#             mean, "b w (p a) -> b w p a", p=self.pred_horizon, a=self.action_dim
-#         )
-#         mean = jnp.tanh(mean / self.max_action) * self.max_action
-#         return mean
-
-#     def loss(
-#         self,
-#         transformer_outputs: Dict[str, TokenGroup],
-#         actions: ArrayLike,
-#         pad_mask: ArrayLike,
-#         train: bool = True,
-#     ) -> Tuple[Array, Dict[str, Array]]:
-#         """Computes the loss for the action regression objective.
-
-#         Args:
-#             transformer_ouputs: must contain self.readout_key with shape (batch_size, window_size, num_tokens,
-#                 embedding_size)
-#             actions: shape (batch_size, >= window_size + pred_horizon - 1, action_dim)
-#             pad_mask: boolean array (batch, window_size) which is True if the timestep is not a padding timestep
-
-#         Returns:
-#             loss: float
-#             metrics: dict
-#         """
-#         # (batch, window_size, pred_horizon, action_dim)
-#         mean = self(transformer_outputs, train=train)
-
-#         window_size = mean.shape[1]
-#         _check_action_window_size(actions, window_size, self.pred_horizon)
-#         actions_chunked = chunk_actions(actions, self.pred_horizon)
-#         actions_chunked = actions_chunked[:, :window_size]
-
-#         loss, metrics = continuous_loss(
-#             mean, actions_chunked, pad_mask[:, :, None, None], loss_type=self.loss_type
-#         )
-#         # Sum over action dimension instead of averaging
-#         loss = loss * self.action_dim
-#         metrics["loss"] = metrics["loss"] * self.action_dim
-#         metrics["mse"] = metrics["mse"] * self.action_dim
-#         return loss, metrics
-
-#     def predict_action(
-#         self,
-#         transformer_outputs: Dict[str, TokenGroup],
-#         train: bool = True,
-#         *args,
-#         sample_shape: tuple = (),
-#         **kwargs,
-#     ) -> jax.Array:
-#         """Convenience methods for predicting actions for the final timestep in the window."""
-#         # only get the last timestep in the window
-#         # (batch, pred_horizon, action_dim)
-#         mean = self(transformer_outputs, train=train)[:, -1]
-#         return jnp.broadcast_to(mean, sample_shape + mean.shape)
-
-
-# class DiscreteActionHead(nn.Module, ActionHead):
-#     """
-#     A basic action decoding head that predicts discretized actions using the transformer token embeddings.
-
-
-#     self.token_per determines how many tokens are used to represent each action.
-#         - If "" (an empty string): then a single token is responsible for producing the action logits
-#             for all dimensions at all future prediction horizons.
-#         - If "pred_horizon", then we use `self.pred_horizon` tokens, each responsible for producing the action logits
-#             for all dimensions at the corresponding future prediction horizon.
-#         - If "action_dim_and_pred_horizon", then we use `self.pred_horizon * self.action_dim` tokens, where
-#             each token is responsible for the logits for the specific dim and timestep.
-
-#     If multi-head attention pooling is used (use_map=True), then the correct number of tokens is automatically
-#     created, otherwise readout_key must have exactly the right number of tokens.
-#     """
-
-#     readout_key: str
-#     use_map: bool = False
-#     token_per: str = "action_dim_and_pred_horizon"
-#     pred_horizon: int = 1
-#     action_dim: int = 7
-#     vocab_size: int = 256
-#     normalization_type: str = "uniform"
-
-#     def setup(self):
-#         total_output = self.pred_horizon * self.action_dim * self.vocab_size
-
-#         if self.token_per == "":
-#             self.n_tokens = 1
-#             self.final_layer_size = total_output
-#         elif self.token_per == "pred_horizon":
-#             self.n_tokens = self.pred_horizon
-#             self.final_layer_size = total_output // self.pred_horizon
-#         elif self.token_per == "action_dim_and_pred_horizon":
-#             self.n_tokens = self.pred_horizon * self.action_dim
-#             self.final_layer_size = self.vocab_size
-#         else:
-#             raise ValueError(f"Invalid token_per: {self.token_per}")
-
-#         if self.use_map:
-#             self.map_head = MAPHead(num_readouts=self.n_tokens)
-
-#         self.vocab_proj = nn.Dense(self.final_layer_size)
-#         self.action_tokenizer = BinTokenizer(
-#             n_bins=self.vocab_size,
-#             bin_type=self.normalization_type,
-#         )
-
-#     def __call__(
-#         self, transformer_outputs: Dict[str, TokenGroup], train: bool = True
-#     ) -> torch.Tensor:
-#         """
-#         Returns:
-#             logits: array w/ shape (batch_size, window_size, pred_horizon, action_dim, vocab_size)
-#         """
-#         token_group = transformer_outputs[self.readout_key]
-#         assert token_group.tokens.ndim == 4, (
-#             f"Expected token_group.tokens to have shape (batch_size, window_size, num_tokens, embedding_size), "
-#             f"but got shape {token_group.tokens.shape}"
-#         )
-#         if self.use_map:
-#             embeddings = self.map_head(token_group, train=train)
-#         else:
-#             embeddings = token_group.tokens
-#             assert (
-#                 embeddings.shape[-2] == self.n_tokens
-#             ), f"Discrete action head expects {self.n_tokens} tokens"
-
-#         # Now, embeddings is (batch_size, window_size, n_tokens, embedding_size)
-#         batch_size, window_size = embeddings.shape[:2]
-
-#         logits = self.vocab_proj(embeddings)
-#         logits = logits.reshape(
-#             batch_size, window_size, self.pred_horizon, self.action_dim, self.vocab_size
-#         )
-#         return logits
-
-#     def loss(
-#         self,
-#         transformer_outputs: Dict[str, TokenGroup],
-#         actions: ArrayLike,
-#         pad_mask: ArrayLike,
-#         train: bool = True,
-#     ):
-#         """Computes the loss for the discretized action objective.
-
-#         Args:
-#             transformer_ouputs: must contain self.readout_key with shape (batch_size, window_size, num_tokens,
-#                 embedding_size)
-#             actions: shape (batch_size, >= window_size + pred_horizon - 1, action_dim)
-#             pad_mask: boolean array (batch, window_size) which is True if the timestep is not a padding timestep
-
-#         Returns:
-#             loss: float
-#             metrics: dict
-#         """
-#         # get the logits for all the actions by taking the action tokens of each timestep,
-#         # unfolding the pred_horizon dim, and projecting to the vocab size
-#         # (batch, window_size, pred_horizon, action_dim, token_embedding_size)
-#         action_logits = self(transformer_outputs, train=train)
-
-#         window_size = action_logits.shape[1]
-#         _check_action_window_size(actions, window_size, self.pred_horizon)
-
-#         actions_chunked = chunk_actions(actions, self.pred_horizon)
-#         actions_chunked = actions_chunked[:, :window_size]
-
-#         loss, metrics = discrete_loss(
-#             self.action_tokenizer,
-#             action_logits,
-#             actions_chunked,
-#             pad_mask[:, :, None, None],
-#         )
-
-#         # For MSE, sum over action dimension instead of averaging
-#         metrics["mse"] = metrics["mse"] * self.action_dim
-
-#         return loss, metrics
-
-#     def predict_action(
-#         self,
-#         transformer_outputs: Dict[str, TokenGroup],
-#         train: bool = True,
-#         argmax: bool = False,
-#         sample_shape: tuple = (),
-#         rng: Optional[PRNGKey] = None,
-#         temperature: float = 1.0,
-#     ) -> jax.Array:
-#         """Convenience methods for predicting actions for the final timestep in the window."""
-#         # only get the last timestep in the window
-#         action_logits = self(transformer_outputs, train=train)[:, -1]
-
-#         if argmax:
-#             action_tokens = jnp.argmax(action_logits, axis=-1).astype(jnp.int32)
-#             action_tokens = jnp.broadcast_to(
-#                 action_tokens, sample_shape + action_tokens.shape
-#             )
-#         else:
-#             dist = distrax.Categorical(logits=action_logits / temperature)
-#             action_tokens = dist.sample(seed=rng, sample_shape=sample_shape).astype(
-#                 jnp.int32
-#             )
-#         return self.action_tokenizer.decode(action_tokens)
-
-
-# class MSEActionHead(ContinuousActionHead):
-#     max_action: float = 5.0
-#     loss_type: str = "mse"
-#     use_map: bool = True
-
-
-# class L1ActionHead(ContinuousActionHead):
-#     max_action: float = 5.0
-#     loss_type: str = "l1"
-#     use_map: bool = True
-
-
-# class TokenPerDimActionHead(DiscreteActionHead):
-#     token_per: str = "action_dim_and_pred_horizon"
+        return loss, {
+            "cross_ent_loss": loss,
+            "accuracy": accuracy,
+        }
+    else:
+        raise NotImplementedError('Softmax cross entropy loss for noise prediction is not implemented.')
 
 
 class DiffusionActionHead(nn.Module):
@@ -498,6 +221,7 @@ class DiffusionActionHead(nn.Module):
         self.use_map = use_map
         self.pred_horizon = pred_horizon
         self.action_dim = action_dim
+        self.n_classes = n_classes
         self.max_action = max_action
         self.min_action = min_action
         self.action_repr = action_repr
@@ -519,6 +243,7 @@ class DiffusionActionHead(nn.Module):
         # create the diffusion model (score network)
         self.diffusion_model = create_diffusion_model(
             self.action_dim * self.pred_horizon,
+            self.n_classes * self.pred_horizon,
             time_dim=self.time_dim,
             num_blocks=self.num_blocks,
             dropout_rate=self.dropout_rate,
@@ -535,14 +260,12 @@ class DiffusionActionHead(nn.Module):
             [torch.prod(self.alphas[: i + 1]) for i in range(self.diffusion_steps)]
         ).to(self.device)
 
-        # if 'bits' in self.action_repr:
-        #     self.bits = int2bits(tf.arange())
-
-        # self.action_tokenizer = BinTokenizer(
-        #     n_bins=self.action_dim,
-        #     bin_type="uniform",
-        #     device=device,
-        # )
+        if 'bits' in self.action_repr:
+            self.bits = int2bits(
+                torch.arange(self.n_classes),
+                self.action_dim,
+                out_dtype=torch.float32
+            ).to(self.device)
     
     def forward(
         self,
@@ -572,8 +295,14 @@ class DiffusionActionHead(nn.Module):
             ).to(self.device)
 
         pred_eps = self.diffusion_model(embeddings, noisy_actions, time, train=train)
-        return pred_eps
 
+        if 'bits' in self.action_repr:
+            pred_eps_post = torch.einsum('bwd,do->bwo', F.softmax(pred_eps, dim=-1), self.bits)
+            pred_eps_post = (pred_eps_post * 2 - 1) * self.max_action
+            return pred_eps, pred_eps_post
+        else:
+            return pred_eps, pred_eps
+        
     def loss(
         self,
         transformer_outputs: Dict[str, TokenGroup],
@@ -609,37 +338,35 @@ class DiffusionActionHead(nn.Module):
         alpha_2 = torch.sqrt(1 - alpha_hat)
         noisy_actions = alpha_1 * actions_flat + alpha_2 * noise
         
-        pred_eps = self(
+        pred_eps, pred_eps_post = self(
             transformer_outputs, train=train, time=time, noisy_actions=noisy_actions
         )
 
         if 'mse' in self.loss_type or 'l1' in self.loss_type:
-            if 'noise' in self.prediction_type:
-                loss, metrics = continuous_loss(
-                    pred_eps, noise, pad_mask[:, :, None], loss_type=self.loss_type
-                )
-                metrics[f"{self.loss_type}_loss"] = metrics[f"{self.loss_type}_loss"] * self.action_dim
+            loss, metrics = continuous_loss(
+                pred_eps_post,
+                noise,
+                actions_flat,
+                pad_mask[:, :, None],
+                loss_type=self.loss_type,
+                pred_type=self.prediction_type
+            )
+            metrics[f"{self.loss_type}_loss"] = metrics[f"{self.loss_type}_loss"] * self.action_dim
         elif 'softmax_cross_ent' in self.loss_type:
-            if 'noise' in self.prediction_type:
-                loss, metrics = softmax_cross_entropy_loss(
-                    pred_eps,
-                    noise,
-                    pad_mask,
-                ) # TODO(saumya): Fix this
-                metrics["cross_ent_loss"] = metrics["cross_ent_loss"] * self.action_dim
+            loss, metrics = softmax_cross_entropy_loss(
+                pred_eps,
+                noise,
+                actions_flat,
+                pad_mask,
+                pred_type=self.prediction_type,
+                action_repr=self.action_repr,
+            )
         else:
             raise NotImplementedError("Loss type not defined.")
-
-        # loss, metrics = discrete_loss(
-        #     self.action_tokenizer,
-        #     pred_eps,
-        #     noise,
-        #     pad_mask[:, :, None],
-        # )
-
+        
+        
         # Sum over action dimension instead of averaging
         loss = loss * self.action_dim
-        
         return loss, metrics
 
     def predict_action(
@@ -652,18 +379,22 @@ class DiffusionActionHead(nn.Module):
         device = 'cuda',
     ) -> torch.Tensor:
         """Convenience methods for predicting actions for the final timestep in the window."""
-        def scan_fn(current_x, time):
+        def scan_fn(current_x, time_now, time_next):
             
-            input_time = torch.broadcast_to(time, (*current_x.shape[:-1], 1))
-
-            eps_pred = self(transformer_outputs, input_time, current_x, train=train)
-
-            alpha_1 = 1 / torch.sqrt(self.alphas[time])
-            alpha_2 = (1 - self.alphas[time]) / (torch.sqrt(1 - self.alpha_hats[time]))
-            current_x = alpha_1 * (current_x - alpha_2 * eps_pred)
+            input_time = torch.broadcast_to(time_now, (*current_x.shape[:-1], 1))
+            eps_pred, eps_pred_post = self(transformer_outputs, input_time, current_x, train=train)
+            
+            if 'noise' in self.prediction_type:
+                alpha_1 = 1 / torch.sqrt(self.alphas[time_now])
+                alpha_2 = (1 - self.alphas[time_now]) / (torch.sqrt(1 - self.alpha_hats[time_now]))
+                current_x = alpha_1 * (current_x - alpha_2 * eps_pred_post)
+            elif 'action' in self.prediction_type:
+                alpha_1 = 1 / (torch.sqrt(1 - self.alpha_hats[time_now]))
+                eps = alpha_1 * (current_x - torch.sqrt(self.alpha_hats[time_now]) * eps_pred_post)
+                current_x = torch.sqrt(self.alpha_hats[time_next]) * eps_pred_post + (torch.sqrt(1 - self.alpha_hats[time_next])) * eps
 
             z = torch.randn(current_x.shape).to(device=device)
-            current_x = current_x + (time > 0) * (torch.sqrt(self.betas[time]) * z)
+            current_x = current_x + (time_now > 0) * (torch.sqrt(self.betas[time_now]) * z)
 
             current_x = torch.clip(current_x, self.min_action, self.max_action)
 
@@ -673,37 +404,26 @@ class DiffusionActionHead(nn.Module):
             batch_size, window_size = transformer_outputs[
                 self.readout_key
             ].tokens.shape[:2]
-            if 'noise' in self.prediction_type:
-                actions_flat = torch.randn((batch_size, window_size, self.pred_horizon * self.action_dim)).to(device=device)
-                actions_flat = torch.clip(actions_flat, self.min_action, self.max_action)
+            
+            actions_flat = torch.randn((batch_size, window_size, self.pred_horizon * self.action_dim)).to(device=device)
+            actions_flat = torch.clip(actions_flat, self.min_action, self.max_action)
 
-                steps = torch.arange(self.diffusion_steps - 1, -1, -1).to(device=device)
-                for x in steps:
-                    actions_flat = scan_fn(actions_flat, x)
+            steps = torch.arange(self.diffusion_steps - 1, -1, -1).to(device=device)
+            for i, x in enumerate(steps):
+                actions_flat = scan_fn(actions_flat, steps[i], steps[min(i+1, len(steps)-1)])
 
-                actions = rearrange(
-                    actions_flat,
-                    "b w (p a) -> b w p a",
-                    p=self.pred_horizon,
-                    a=self.action_dim,
-                )
-                if 'bits' in self.action_repr:
-                    bits = actions > 0
-                    action_tokens = bits2int(bits)
-                    action_tokens = torch.clip(action_tokens, 0, 5)
-            # if argmax:
-            #     action_tokens = torch.argmax(actions, axis=-1).type(torch.int32)
-            #     action_tokens = torch.broadcast_to(
-            #         action_tokens, sample_shape + action_tokens.shape
-            #     )
-            # else:
-            #     dist = torch.distributions.Categorical(logits=actions / temperature)
-            #     action_tokens = dist.sample(sample_shape=sample_shape).type(
-            #         torch.int32
-            #     )
-            # return self.action_tokenizer.decode(action_tokens)[:,-1] # only get the last timestep in the window
+            actions = rearrange(
+                actions_flat,
+                "b w (p a) -> b w p a",
+                p=self.pred_horizon,
+                a=self.action_dim,
+            )
+            if 'bits' in self.action_repr:
+                bits = actions > 0
+                action_tokens = bits2int(bits)
+                action_tokens = torch.clip(action_tokens, 0, self.n_classes-1)
+
             return action_tokens[:,-1]
 
         actions = sample_actions(device)
-        # actions = actions.reshape(sample_shape + actions.shape[1:])
         return actions

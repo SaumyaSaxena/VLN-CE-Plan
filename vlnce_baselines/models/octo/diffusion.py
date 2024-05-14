@@ -204,6 +204,7 @@ class MLPResNet(nn.Module):
 
 
 def create_diffusion_model(
+    inp_action_dim: int,
     out_dim: int,
     time_dim: int,
     num_blocks: int,
@@ -213,7 +214,7 @@ def create_diffusion_model(
     embedding_size: int,
     device,
 ):  
-    inp_dim = time_dim + embedding_size + out_dim
+    inp_dim = time_dim + embedding_size + inp_action_dim
     return ScoreActor(
         FourierFeatures(time_dim, learnable=True, device=device),
         MLP(time_dim, (2 * time_dim, time_dim), device=device),

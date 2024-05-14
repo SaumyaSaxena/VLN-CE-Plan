@@ -120,8 +120,8 @@ model:
         readout_key: readout_action
         use_map: false
         embedding_size: ${model.token_embedding_size}
-        prediction_type: 'noise' # 'action'
-        loss_type: 'mse' # 'l1', 'softmax_cross_ent'
+        prediction_type: 'noise' # 'action', 'noise'
+        loss_type: 'mse' # 'l1', 'softmax_cross_ent', 'mse'
       module: vlnce_baselines.models.octo.action_heads
       name: DiffusionActionHead
   max_horizon: 10
