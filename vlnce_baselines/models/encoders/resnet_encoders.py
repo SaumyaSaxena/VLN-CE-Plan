@@ -226,3 +226,10 @@ class TorchVisionResNet50(TorchVisionResNet):
 class TorchVisionResNet18(TorchVisionResNet):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, resnet_version="resnet18", **kwargs)
+
+class VlnResnetRGBDEncoder(nn.Module):
+    def __init__(self, *args: Any, **kwargs: Any)
+        pass
+
+    def forward(self, observations: Observations) -> Tensor:
+        pass

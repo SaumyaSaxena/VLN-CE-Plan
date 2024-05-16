@@ -39,8 +39,9 @@ VLN-CE uses Habitat-Sim [built from source](https://github.com/facebookresearch/
 git clone --branch v0.1.7 https://github.com/facebookresearch/habitat-sim.git
 cd habitat-sim
 pip install -r requirements.txt
-python setup.py install --with-cuda --headless
+python setup.py install --with-cuda --headless --cmake
 ```
+If GL errors occur try installing: sudo apt-get install libegl1-mesa-dev libgles2-mesa
 
 ### Install Habitat-Lab
 

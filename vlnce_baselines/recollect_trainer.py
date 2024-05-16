@@ -96,6 +96,12 @@ class RecollectTrainer(BaseVLNCETrainer):
             print(f'{float(total_trainable_params) / 1e3:.2f} K ({total_trainable_params})')
         else:
             print(f'{float(total_trainable_params):.2f}')
+    
+    def print_cuda_memory(self, print_loc=' '):
+        print(print_loc)
+        print(f"torch.cuda.memory_allocated: {torch.cuda.memory_allocated(self.device)/1024/1024}MB")
+        print(f"torch.cuda.memory_reserved: {torch.cuda.memory_reserved(self.device)/1024/1024}MB")
+        print(f"torch.cuda.max_memory_reserved: {torch.cuda.max_memory_reserved(self.device)/1024/1024}MB")
 
     def train(self) -> None:
         split = self.config.TASK_CONFIG.DATASET.SPLIT
@@ -126,6 +132,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                 num_workers=1,
             )
         )
+
         self._initialize_policy(
             self.config,
             self.config.IL.load_from_ckpt,

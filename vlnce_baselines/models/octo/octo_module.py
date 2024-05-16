@@ -171,9 +171,6 @@ class OctoTransformer(nn.Module):
         # batch_size, horizon = jax.tree_util.tree_leaves(observations)[0].shape[:2]
         batch_size, horizon = observations['image_primary'].shape[:2]
         assert horizon <= self.max_horizon, "horizon must be <= max_horizon"
-        # assert jax.tree_util.tree_all(
-        #     jax.tree_map(lambda x: x.shape[1] == horizon, observations)
-        # ), "observations must have the same horizon"
 
         #
         # Attention rules for the transformer
@@ -265,7 +262,7 @@ class OctoTransformer(nn.Module):
             readout_tokens = torch.zeros(
                 (batch_size, horizon, n_tokens_for_readout, self.token_embedding_size),
                 device=self.device
-            ) # TODO(saumya): device?
+            )
             # Add positional embedding
             embedding = self.readout_pos_emb[i](torch.arange(n_tokens_for_readout*horizon).to(self.device)) # Use only the timesteps we receive as input
             embedding = embedding.reshape(1, horizon, n_tokens_for_readout, self.token_embedding_size)

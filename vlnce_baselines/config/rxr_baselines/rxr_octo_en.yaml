@@ -1,7 +1,7 @@
 BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_task.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
-TORCH_GPU_ID: 0
+TORCH_GPU_ID: 2
 NUM_ENVIRONMENTS: 5 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en
 CHECKPOINT_FOLDER: outputs/rxr_octo_en
@@ -30,12 +30,12 @@ EVAL:
   SAVE_RESULTS: False
   logger_type: 'wandb' # 'wandb', 'tb'
   wandb_load:
-    run_path: 'iam-lab/vlnce_plan/0cbya9f4'
-    file: checkpoints/ckpt_epoch_5_step_59988_action_loss_0.668.pth
+    run_path: 'iam-lab/vlnce_plan/4753ppx4'
+    file: checkpoints/ckpt_epoch_3_step_15996_action_loss_1.056.pth
     entity: iam-lab
     project: vlnce_plan_eval
     group: octo
-    name: full_instr_1_0_bits_softmax_pred_action_mse_loss_epoch5
+    name: full_instr_1_0_bits_softmax_pred_noise_mse_los
   tb_load:
     EVAL_CKPT_PATH_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57/checkpoints/ckpt.14.pth # If this is a directory, evaluate all checkpoints. Else evaluate the specified checkpoint.pth
     EVAL_LOG_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57
@@ -54,7 +54,7 @@ EVAL:
   COMMON:
     SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
     NUM_ENVIRONMENTS: 10 # Number of envs per GPU
-    TORCH_GPU_ID: 0
+    TORCH_GPU_ID: 2
 
 MODEL:
   policy_name: OctoPolicy
@@ -73,10 +73,10 @@ RL:
           depth: (256, 256)
 
 IL:
-  batch_size: 2
+  batch_size: 5
   epochs: 15
   inflection_weight_coef: 1.9
-  load_from_ckpt: False
+  load_from_ckpt: True
   ckpt_to_load: outputs/rxr_octo_en_subtasks/2024_01_12-14_46_50/checkpoints/ckpt.14.pth
 
   OCTO_TRAINER:
@@ -101,7 +101,7 @@ train:
 
   # Scheduler config
   scheduler:
-    use: False
+    use: True
     name: timm_cosine
     CosineAnnealingLR:
       eta_min: 0.00001
@@ -114,7 +114,7 @@ train:
       epochs: 15  # Total epochs to run (warmup + decay + cooldown)
       min_lr: 1.0e-5         # k
       warmup_lr: 1.0e-6
-      warmup_epochs: 10
+      warmup_epochs: 2
       cooldown_epochs: 5
 
   grad_clip:

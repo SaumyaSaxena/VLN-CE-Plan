@@ -190,11 +190,10 @@ class BlockTransformer(nn.Module):
         pad_attention_mask = self.generate_pad_attention_mask(
             prefix_groups, timestep_groups, self.num_attention_heads
         )
-        comb_attention_mask = torch.logical_and(self.attention_mask, pad_attention_mask)
+        comb_attention_mask = torch.logical_not(torch.logical_and(self.attention_mask, pad_attention_mask))
         comb_attention_mask = comb_attention_mask.repeat(1,self.num_attention_heads,1,1)
         comb_attention_mask = comb_attention_mask.reshape(-1,comb_attention_mask.shape[2],comb_attention_mask.shape[3])
-        comb_attention_mask = comb_attention_mask.to(dtype=torch.float32)
-
+        # comb_attention_mask = comb_attention_mask.to(dtype=torch.float32)
         # Run transformer
         output = self.transformer(
             input_tokens, comb_attention_mask, train=train
@@ -203,6 +202,7 @@ class BlockTransformer(nn.Module):
         all_prefix_outputs, all_timestep_outputs = self.split_output_tokens(
             output, prefix_groups, timestep_groups
         )
+
         return all_prefix_outputs, all_timestep_outputs
 
     def assemble_input_tokens(
@@ -347,7 +347,6 @@ class BlockTransformer(nn.Module):
                 metadata_j = get_token_metadata(j)
                 mask = int(metadata_i.should_attend_to(metadata_j))
                 attention_mask[i, j] = mask
-
         return attention_mask
 
 
@@ -377,6 +376,7 @@ class BlockTransformer(nn.Module):
             "batch horizon n_tokens -> batch (horizon n_tokens)",
         )
         pad_mask = torch.concatenate([prefix_pad_mask, timestep_pad_mask], axis=1)
+
         # pad_mask has shape (batch, total_tokens)
         pad_mask = torch.broadcast_to(
             pad_mask[:, None, None, :],
@@ -425,22 +425,22 @@ class BlockTransformer(nn.Module):
         """
         Visualizes the attention patterns for each token group for debugging purposes.
         """
-        logging.warning("Prefix groups:")
-        for prefix_group in prefix_groups:
-            logging.warning(
-                "PrefixGroup(name=%s, shape=%s, attends_to=%s)",
-                prefix_group.name,
-                prefix_group.tokens.shape,
-                flax.core.frozen_dict.pretty_repr(prefix_group.attention_rules),
-            )
-        logging.warning("Timestep groups:")
-        for timestep_group in timestep_groups:
-            logging.warning(
-                "TimestepGroup(name=%s, shape=%s, attends_to=%s)",
-                timestep_group.name,
-                timestep_group.tokens.shape,
-                flax.core.frozen_dict.pretty_repr(timestep_group.attention_rules),
-            )
+        # logging.warning("Prefix groups:")
+        # for prefix_group in prefix_groups:
+        #     logging.warning(
+        #         "PrefixGroup(name=%s, shape=%s, attends_to=%s)",
+        #         prefix_group.name,
+        #         prefix_group.tokens.shape,
+        #         flax.core.frozen_dict.pretty_repr(prefix_group.attention_rules),
+        #     )
+        # logging.warning("Timestep groups:")
+        # for timestep_group in timestep_groups:
+        #     logging.warning(
+        #         "TimestepGroup(name=%s, shape=%s, attends_to=%s)",
+        #         timestep_group.name,
+        #         timestep_group.tokens.shape,
+        #         flax.core.frozen_dict.pretty_repr(timestep_group.attention_rules),
+        #     )
 
         import rich
 

@@ -186,5 +186,7 @@ val_kwargs:
   num_val_batches: 16
   val_shuffle_buffer_size: 1000
 
-
-
+image_encoder_kwargs:
+  SmallStem16:
+    num_inp_channels: ${num_inp_channels}
+  

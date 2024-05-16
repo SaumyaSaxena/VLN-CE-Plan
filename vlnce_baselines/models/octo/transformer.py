@@ -166,7 +166,6 @@ class Encoder1DBlock(nn.Module):
 
         self.layer_norm2 = nn.LayerNorm(token_embedding_size)
         self.mlp_block = MlpBlock(mlp_dim=mlp_dim, out_dim=token_embedding_size, dropout_rate=dropout_rate, device=device)
-        
 
     def forward(self, inputs, attention_mask):
         """Applies Encoder1DBlock module.

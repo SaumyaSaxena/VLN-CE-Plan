@@ -57,6 +57,7 @@ class MyCollator(object):
     def __init__(self, obs_transforms, device):
         self.obs_transforms = obs_transforms
         self.device = device
+    
     def __call__(self, batch):
         """Each sample in batch: (
             obs,
@@ -114,6 +115,7 @@ class MyCollator(object):
         instructions_batch_flat = []
         for row in instructions_batch:
             instructions_batch_flat += row
+
         return final_obs_batch, instructions_batch_flat
     
 @baseline_registry.register_trainer(name="octo_trainer")
@@ -163,8 +165,8 @@ class OctoRecollectTrainer(RecollectTrainer):
                 ckpt = torch.load(ckpt_file.name)
             
             if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
-                logger.info(f"checkpoint_path: {self.config.EVAL.EVAL_CKPT_PATH_DIR}")
-                ckpt = self.load_checkpoint(self.config.EVAL.EVAL_CKPT_PATH_DIR, map_location=self.device)
+                logger.info(f"checkpoint_path: {self.config.EVAL.tb_load.EVAL_CKPT_PATH_DIR}")
+                ckpt = self.load_checkpoint(self.config.EVAL.tb_load.EVAL_CKPT_PATH_DIR, map_location=self.device)
             self.octo_config = ckpt['octo_config']
         else:
             self.octo_config = OmegaConf.load(config['OCTO_CONFIG_PATH'])
@@ -264,8 +266,6 @@ class OctoRecollectTrainer(RecollectTrainer):
         )
         self.config.train.scheduler.timm_cosine.epochs = self.config.IL.epochs # TODO: why is this not updating in cfg
         
-
-        
         self.config.freeze()
 
         current_time = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
@@ -291,12 +291,15 @@ class OctoRecollectTrainer(RecollectTrainer):
                 flush_secs=self.flush_secs,
                 purge_step=0,
             )
+        
 
+        self.print_cuda_memory("BEFORE POLICY INITIALIZATION")
         self._initialize_policy(
                 self.config,
                 self.config.IL.load_from_ckpt
             )
         self.policy.train()
+        self.print_cuda_memory("AFTER POLICY INITIALIZATION")
 
         dataset = OctoTeacherRecollectionDataset(self.config, self.octo_config)
         collate_fn = MyCollator(dataset.obs_transforms, self.device)
@@ -342,8 +345,6 @@ class OctoRecollectTrainer(RecollectTrainer):
             epoch_logs['optim/lr'] = []
             epoch_logs['start_train_step'] = self.step_id
 
-            # self.save_checkpoint(epoch, self.step_id, ckpt_save_dir, 0, self.config.wandb.saver.upload)
-
             for batch_idx in t:
                 # torch.cuda.memory._record_memory_history()
                 batch_time = time.time()
@@ -378,19 +379,8 @@ class OctoRecollectTrainer(RecollectTrainer):
                     dataset.obs_transforms,
                 )
                 batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1)
-                del observations_batch
-                
-                # for k, v in batch["task"].items():
-                #     if k not in ("pad_mask_dict", "language_instruction"):
-                #         batch["task"][k] = v.to(device=self.device, non_blocking=True)
-                # if 'language_instruction' in batch["task"].keys():
-                #     for k, v in batch["task"]["language_instruction"].items():
-                #         batch["task"]["language_instruction"][k] = v.to(device=self.device, non_blocking=True)
-                
-                # for k, v in batch["task"]["pad_mask_dict"].items():
-                #     batch["task"]["pad_mask_dict"][k] = v.to(device=self.device, non_blocking=True)
-                
-                # gradient accumulation
+                del observations_batch, instructions
+
                 if (
                     self.config.IL.OCTO_TRAINER.effective_batch_size
                     > 0
@@ -405,7 +395,6 @@ class OctoRecollectTrainer(RecollectTrainer):
                 else:
                     loss_accumulation_scalar = 1
                     step_grad = True
-
                 action_loss, metrics_dict = self._update_agent(
                     batch,
                     task,
@@ -414,10 +403,9 @@ class OctoRecollectTrainer(RecollectTrainer):
                 )
 
                 del batch, task
+                with torch.cuda.device(self.device):
+                    torch.cuda.empty_cache()
 
-                if torch.cuda.is_available():
-                    with torch.cuda.device(self.device):
-                        torch.cuda.empty_cache()
                 # if self.step_id % 100 == 0:
                 #     torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
 
@@ -425,20 +413,10 @@ class OctoRecollectTrainer(RecollectTrainer):
                     t.set_postfix(
                         {
                             "Epoch": epoch_str,
-                            # "Loss": round(loss, 4),
                             "ActionLoss": round(action_loss, 4),
-                            # "AuxLoss": round(aux_loss, 4),
                             "BatchTime": round(time.time() - batch_time, 2),
                         }
                     )
-                
-                    # logger.info(
-                    #     f"[Epoch: {epoch_str}] [Batch: {batch_str}]"
-                    #     + f" [BatchTime: {round(time.time() - batch_time, 2)}s]"
-                    #     + f" [EpochTime: {round(time.time() - epoch_time)}s]"
-                    #     + f" [Loss: {round(action_loss, 4)}]"
-                    #     # + aux_s
-                    # )
 
                 if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
                     tb_writer.add_scalar("action_loss", action_loss, self.step_id)
@@ -471,6 +449,7 @@ class OctoRecollectTrainer(RecollectTrainer):
             metric = sum(epoch_logs['loss'])/len(epoch_logs['loss'])
             self.save_checkpoint(epoch, self.step_id, ckpt_save_dir, metric, self.config.wandb.saver.upload)
 
+
         AuxLosses.deactivate()
         dataset.close_sims()
         if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
@@ -493,13 +472,7 @@ class OctoRecollectTrainer(RecollectTrainer):
             batch["action"],
             pad_mask=batch["observation"]["pad_mask"]
         )
-        # action_loss = ((weights * action_loss).sum(0) / weights.sum(0)).mean()
 
-        # aux_mask = (weights > 0).view(-1)
-        # aux_loss = AuxLosses.reduce(aux_mask)
-
-        # loss = action_loss + aux_loss
-        # loss = loss / loss_accumulation_scalar
         action_loss.backward()
         del transformer_embeddings
         if step_grad:
@@ -514,8 +487,6 @@ class OctoRecollectTrainer(RecollectTrainer):
 
             self.optimizer.zero_grad()
 
-        # if isinstance(aux_loss, torch.Tensor):
-        #     aux_loss = aux_loss.item()
         return action_loss.item(), loss_dict
     
     def _setup_eval_config(self, checkpoint_config: Config) -> Config:
