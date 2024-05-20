@@ -462,7 +462,9 @@ class BaseVLNCETrainer(BaseILTrainer):
                     rgb_frames[i].append(frame)
                     actions_all_envs[i].append(actions[i][0].item())
 
-                if not dones[i]:
+                done_eval_i = envs.call_at(i, "get_done_eval", None)
+                # if not dones[i]:
+                if not done_eval_i:
                     continue
 
                 ep_id = current_episodes[i].episode_id

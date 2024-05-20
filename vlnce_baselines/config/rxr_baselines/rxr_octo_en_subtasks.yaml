@@ -45,6 +45,8 @@ EVAL:
       SUCCESS_DISTANCE: 2.0
       SUCCESS:
         SUCCESS_DISTANCE: 2.0
+      SUCCESS_NO_STOP:
+        SUCCESS_DISTANCE: 2.0
       ORACLE_SUCCESS:
         SUCCESS_DISTANCE: 2.0
       NDTW:
@@ -80,7 +82,6 @@ IL:
   ckpt_to_load: outputs/rxr_octo_en_subtasks/2024_01_12-14_46_50/checkpoints/ckpt.14.pth
 
   OCTO_TRAINER:
-    action_repr: 'bits' #'one-hot', 'bits'
     nbits: 4 # used when action_repr=bits
     scale_bits: 0.1 # used when action_repr=bits
     preload_size: 30

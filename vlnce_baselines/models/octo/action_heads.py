@@ -58,130 +58,113 @@ def _check_action_window_size(actions, window_size, pred_horizon):
         Did you make sure to set "future_action_window_size" correctly in the data config?
     """
 
+class DiscreteActionHead(nn.Module):
+    def __init__(self,
+        readout_key: str,
+        use_map: bool = False,
+        pred_horizon: int = 1,
+        action_dim: int = 7,
+        max_action: float = 6.0,
+        min_action: float = 0.0,
+        prediction_type: str = 'action',
+        action_repr: str = 'one-hot',
+        loss_type: str = "mse",
+        embedding_size: int = 384,
+        device: str = 'cuda',
+        **kwargs,
+    ):
+        super().__init__()
+        self.readout_key = readout_key
+        self.prediction_type = prediction_type
+        self.action_repr = action_repr
+        self.max_action = max_action
+        self.min_action = min_action
+        self.pred_horizon = pred_horizon
+        self.action_dim = action_dim
 
-def continuous_loss(
-    pred_value,
-    noise,
-    actions_flat,
-    mask,
-    loss_type: str = "mse",
-    pred_type='noise',
-):
-    """
-    Args:
-        pred_value: shape (batch_dims...)
-        ground_truth_value: continuous values w/ shape (batch_dims...)
-        mask: broadcastable to ground_truth
-    """
-    if 'noise' in pred_type:
-        if loss_type == "mse":
-            loss = torch.square(pred_value - noise)
-        elif loss_type == "l1":
-            loss = torch.abs(pred_value - noise)
-        else:
-            raise ValueError(f"Invalid loss type: {loss_type}")
+        self.action_mlp = nn.Linear(
+            in_features=embedding_size,
+            out_features=action_dim*pred_horizon,
+        )
+
+    def forward(self, transformer_outputs: Dict[str, TokenGroup]):
+        token_group = transformer_outputs[self.readout_key]
+
+        assert token_group.tokens.ndim == 4, (
+            f"Expected token_group.tokens to have shape (batch_size, window_size, num_tokens, embedding_size), "
+            f"but got shape {token_group.tokens.shape}"
+        )
+        # Mean pooling
+        embeddings = token_group.tokens.mean(axis=-2)
+        # Now, embeddings is (batch_size, window_size, embedding_size)
+
+        pred_logits = self.action_mlp(embeddings)
+        pred_logits = rearrange(
+            pred_logits, "b w (p a) -> b w p a", p=self.pred_horizon, a=self.action_dim
+        )
+        return pred_logits
     
-    if 'action' in pred_type:
-        if loss_type == "mse":
-            loss = torch.square(pred_value - actions_flat)
-        elif loss_type == "l1":
-            loss = torch.abs(pred_value - actions_flat)
-        else:
-            raise ValueError(f"Invalid loss type: {loss_type}")
-    
-    loss = masked_mean(loss, mask)
-    return loss, {
-        f"{loss_type}_loss": loss
-    }
+    def loss(
+        self,
+        transformer_outputs: Dict[str, TokenGroup],
+        actions,
+        pad_mask,
+        train: bool = True,
+    ):
+        pred_logits = self(transformer_outputs)
 
-
-def discrete_loss(
-    discrete_tokenizer: BinTokenizer,
-    logits,
-    ground_truth_value,
-    mask,
-):
-    """
-    Args:
-        discrete_tokenizer: BinTokenizer to use on ground_truth_value
-        logits: shape (batch_dims..., vocab_size)
-        ground_truth_value: continuous values in w/ shape (batch_dims...)
-        mask: broadcastable to ground_truth_value
-    """
-    labels = discrete_tokenizer(ground_truth_value)
-    labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
-
-    loss = -torch.sum(logits * labels_one_hot, axis=-1)
-    loss = masked_mean(loss, mask)
-
-    # compute accuracy between predicted actions and target actions
-    pred_label = torch.argmax(logits, axis=-1)
-    accuracy = pred_label == labels
-    accuracy = masked_mean(accuracy, mask)
-
-    # detokenize the predicted actions
-    pred_value = discrete_tokenizer.decode(pred_label)
-    mse = torch.square(pred_value - ground_truth_value)
-    mse = masked_mean(mse, mask)
-    return loss, {
-        "loss": loss,
-        "mse": mse,
-        "accuracy": accuracy,
-    }
-
-def softmax_cross_entropy_loss(
-    pred_logits,
-    noise,
-    actions_flat,
-    mask,
-    pred_type='action',
-    action_repr='bits',
-):
-    """
-    Args:
-        logits: shape (batch_dims..., vocab_size)
-        ground_truth_value: continuous values in w/ shape (batch_dims...)
-        mask: broadcastable to ground_truth_value
-    """
-    if 'action' in pred_type:
-        if 'bits' in action_repr: # actions_flat is in bits
-            labels = bits2int(actions_flat > 0)
-        else:
-            labels = torch.argmax(actions_flat, axis=-1)
-        # labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
+        batch_size, window_size = pad_mask.shape
+        _check_action_window_size(actions, window_size, self.pred_horizon)
+        actions_chunked = chunk_actions(actions, self.pred_horizon) # shape(bs, num_chunks, pred_horizon, action_dim)
+        actions_chunked = actions_chunked[:, :window_size]
+        
+        labels = torch.argmax(actions_chunked, axis=-1)
 
         cross_ent_loss = torch.nn.CrossEntropyLoss(reduction='none')
 
         logits_flat = rearrange(
             pred_logits,
-            "b w a -> (b w) a"
+            "b w h a -> (b w h) a"
         )
 
         labels_flat = rearrange(
             labels,
-            "b w -> (b w)"
+            "b w h -> (b w h)"
         )
         loss = cross_ent_loss(logits_flat, labels_flat) 
+
         loss = rearrange(
             loss,
-            "(b w) -> b w",
+            "(b w h) -> b w h",
             b = labels.shape[0],
-            w = labels.shape[1]
+            w = labels.shape[1],
+            h = labels.shape[2],
         )
-
-        loss = masked_mean(loss, mask)
+        loss = masked_mean(loss, pad_mask[:,:,None])
 
         # compute accuracy between predicted actions and target actions
         pred_label = torch.argmax(pred_logits, axis=-1)
         accuracy = pred_label == labels
-        accuracy = masked_mean(accuracy, mask)
+        accuracy = masked_mean(accuracy, pad_mask[:,:,None])
 
+        loss = loss * self.action_dim
         return loss, {
             "cross_ent_loss": loss,
             "accuracy": accuracy,
         }
-    else:
-        raise NotImplementedError('Softmax cross entropy loss for noise prediction is not implemented.')
+
+    def predict_action(
+        self,
+        transformer_outputs: Dict[str, TokenGroup],
+        train: bool = True,
+        argmax: bool = False,
+        sample_shape: tuple = (),
+        temperature: float = 1.0,
+        device = 'cuda',
+    ) -> torch.Tensor:
+        pred_logits = self(transformer_outputs)[:,-1,0] # last window and first time step
+        action_tokens = torch.argmax(pred_logits, axis=-1, keepdim=True)
+        return action_tokens
 
 
 class DiffusionActionHead(nn.Module):
@@ -364,7 +347,6 @@ class DiffusionActionHead(nn.Module):
         else:
             raise NotImplementedError("Loss type not defined.")
         
-        
         # Sum over action dimension instead of averaging
         loss = loss * self.action_dim
         return loss, metrics
@@ -412,14 +394,14 @@ class DiffusionActionHead(nn.Module):
             for i, x in enumerate(steps):
                 actions_flat = scan_fn(actions_flat, steps[i], steps[min(i+1, len(steps)-1)])
 
-            actions = rearrange(
+            action_tokens = rearrange(
                 actions_flat,
                 "b w (p a) -> b w p a",
                 p=self.pred_horizon,
                 a=self.action_dim,
             )
             if 'bits' in self.action_repr:
-                bits = actions > 0
+                bits = action_tokens > 0
                 action_tokens = bits2int(bits)
                 action_tokens = torch.clip(action_tokens, 0, self.n_classes-1)
 
@@ -427,3 +409,128 @@ class DiffusionActionHead(nn.Module):
 
         actions = sample_actions(device)
         return actions
+
+def continuous_loss(
+    pred_value,
+    noise,
+    actions_flat,
+    mask,
+    loss_type: str = "mse",
+    pred_type='noise',
+):
+    """
+    Args:
+        pred_value: shape (batch_dims...)
+        ground_truth_value: continuous values w/ shape (batch_dims...)
+        mask: broadcastable to ground_truth
+    """
+    if 'noise' in pred_type:
+        if loss_type == "mse":
+            loss = torch.square(pred_value - noise)
+        elif loss_type == "l1":
+            loss = torch.abs(pred_value - noise)
+        else:
+            raise ValueError(f"Invalid loss type: {loss_type}")
+    
+    if 'action' in pred_type:
+        if loss_type == "mse":
+            loss = torch.square(pred_value - actions_flat)
+        elif loss_type == "l1":
+            loss = torch.abs(pred_value - actions_flat)
+        else:
+            raise ValueError(f"Invalid loss type: {loss_type}")
+    
+    loss = masked_mean(loss, mask)
+    return loss, {
+        f"{loss_type}_loss": loss
+    }
+
+
+def discrete_loss(
+    discrete_tokenizer: BinTokenizer,
+    logits,
+    ground_truth_value,
+    mask,
+):
+    """
+    Args:
+        discrete_tokenizer: BinTokenizer to use on ground_truth_value
+        logits: shape (batch_dims..., vocab_size)
+        ground_truth_value: continuous values in w/ shape (batch_dims...)
+        mask: broadcastable to ground_truth_value
+    """
+    labels = discrete_tokenizer(ground_truth_value)
+    labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
+
+    loss = -torch.sum(logits * labels_one_hot, axis=-1)
+    loss = masked_mean(loss, mask)
+
+    # compute accuracy between predicted actions and target actions
+    pred_label = torch.argmax(logits, axis=-1)
+    accuracy = pred_label == labels
+    accuracy = masked_mean(accuracy, mask)
+
+    # detokenize the predicted actions
+    pred_value = discrete_tokenizer.decode(pred_label)
+    mse = torch.square(pred_value - ground_truth_value)
+    mse = masked_mean(mse, mask)
+    return loss, {
+        "loss": loss,
+        "mse": mse,
+        "accuracy": accuracy,
+    }
+
+def softmax_cross_entropy_loss(
+    pred_logits,
+    noise,
+    actions_flat,
+    mask,
+    pred_type='action',
+    action_repr='bits',
+):
+    """
+    Args:
+        logits: shape (batch_dims..., vocab_size)
+        ground_truth_value: continuous values in w/ shape (batch_dims...)
+        mask: broadcastable to ground_truth_value
+    """
+    if 'action' in pred_type:
+        if 'bits' in action_repr: # actions_flat is in bits
+            labels = bits2int(actions_flat > 0)
+        else:
+            labels = torch.argmax(actions_flat, axis=-1)
+        # labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
+
+        cross_ent_loss = torch.nn.CrossEntropyLoss(reduction='none')
+
+        logits_flat = rearrange(
+            pred_logits,
+            "b w a -> (b w) a"
+        )
+
+        labels_flat = rearrange(
+            labels,
+            "b w -> (b w)"
+        )
+        loss = cross_ent_loss(logits_flat, labels_flat) 
+        loss = rearrange(
+            loss,
+            "(b w) -> b w",
+            b = labels.shape[0],
+            w = labels.shape[1]
+        )
+
+        loss = masked_mean(loss, mask)
+
+        # compute accuracy between predicted actions and target actions
+        pred_label = torch.argmax(pred_logits, axis=-1)
+        accuracy = pred_label == labels
+        accuracy = masked_mean(accuracy, mask)
+
+        return loss, {
+            "cross_ent_loss": loss,
+            "accuracy": accuracy,
+        }
+    else:
+        raise NotImplementedError('Softmax cross entropy loss for noise prediction is not implemented.')
+

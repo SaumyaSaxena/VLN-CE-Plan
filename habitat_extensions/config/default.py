@@ -89,11 +89,22 @@ _C.TASK.ORACLE_NAVIGATION_ERROR.TYPE = "OracleNavigationError"
 _C.TASK.ORACLE_SUCCESS = CN()
 _C.TASK.ORACLE_SUCCESS.TYPE = "OracleSuccess"
 _C.TASK.ORACLE_SUCCESS.SUCCESS_DISTANCE = 3.0
+# ----------------------------------------------------------------------------
+# SUCCESS_NO_STOP MEASUREMENT
+# ----------------------------------------------------------------------------
+_C.TASK.SUCCESS_NO_STOP = CN()
+_C.TASK.SUCCESS_NO_STOP.TYPE = "SuccessNoStop"
+_C.TASK.SUCCESS_NO_STOP.SUCCESS_DISTANCE = 3.0
 # -----------------------------------------------------------------------------
 # SPL_RxR MEASUREMENT
 # -----------------------------------------------------------------------------
 _C.TASK.SPL_RxR = CN()
 _C.TASK.SPL_RxR.TYPE = "SPLRxR"
+# -----------------------------------------------------------------------------
+# SPL_RxR_NO_STOP MEASUREMENT
+# -----------------------------------------------------------------------------
+_C.TASK.SPL_RxR_NO_STOP = CN()
+_C.TASK.SPL_RxR_NO_STOP.TYPE = "SPLRxRNoStop"
 # ----------------------------------------------------------------------------
 # ORACLE_SPL MEASUREMENT
 # ----------------------------------------------------------------------------

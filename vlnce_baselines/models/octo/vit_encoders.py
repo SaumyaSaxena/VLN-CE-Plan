@@ -127,6 +127,7 @@ class SmallStem(nn.Module):
         num_features: int = 512,
         img_norm_type: str = "default",
         num_inp_channels: int = 3,
+        trainable: bool = False,
         device: str = 'cuda',
     ):
         super().__init__()
@@ -173,8 +174,13 @@ class SmallStem(nn.Module):
 
         if use_film:
             self.film_conditioning = FilmConditioning()
+
+        for param in self.parameters():
+            param.requires_grad_(trainable)
         
     def forward(self, observations: torch.Tensor, train: bool = True, cond_var=None):
+        if observations.shape[3] > 4: # permute to change to (b,c,h,w) format
+            observations = observations.permute(0,3,1,2)
         expecting_cond_var = self.use_film
         received_cond_var = cond_var is not None
         assert (
@@ -197,7 +203,7 @@ class SmallStem(nn.Module):
         if self.use_film:
             assert cond_var is not None, "Cond var is None, nothing to condition on"
             x = self.film_conditioning(x, cond_var)
-        return x
+        return x.permute(0,2,3,1) # permute to change back to (b,h,w,c) format.
 
 
 class ResidualUnit(nn.Module):
@@ -329,9 +335,10 @@ class SmallStem16(SmallStem):
             num_features: int = 512,
             img_norm_type: str = "default",
             num_inp_channels: int = 3,
+            trainable: bool = False,
             device: str = 'cuda,'
         ):
-        super().__init__(use_film, patch_size, kernel_sizes, strides, features, padding, num_features, img_norm_type, num_inp_channels, device)
+        super().__init__(use_film, patch_size, kernel_sizes, strides, features, padding, num_features, img_norm_type, num_inp_channels, trainable, device)
 
 
 class SmallStem32(SmallStem):

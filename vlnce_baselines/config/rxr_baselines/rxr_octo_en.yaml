@@ -1,7 +1,7 @@
 BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_task.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
-TORCH_GPU_ID: 2
+TORCH_GPU_ID: 0
 NUM_ENVIRONMENTS: 5 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en
 CHECKPOINT_FOLDER: outputs/rxr_octo_en
@@ -12,7 +12,7 @@ wandb:
   entity: iam-lab
   group: octo
   project: vlnce_plan
-  name: octo_full_instr_beta_1_0_bits_pred_softmax_PRED_NOISE_mse_loss
+  name: octo_full_instr_discrete_action_head_ResNet
   saver:
     upload: True
     save_top_k: 5
@@ -30,12 +30,12 @@ EVAL:
   SAVE_RESULTS: False
   logger_type: 'wandb' # 'wandb', 'tb'
   wandb_load:
-    run_path: 'iam-lab/vlnce_plan/4753ppx4'
-    file: checkpoints/ckpt_epoch_3_step_15996_action_loss_1.056.pth
+    run_path: 'iam-lab/vlnce_plan/3awrg8c1'
+    file: checkpoints/ckpt_epoch_3_step_15996_action_loss_4.406.pth
     entity: iam-lab
     project: vlnce_plan_eval
     group: octo
-    name: full_instr_1_0_bits_softmax_pred_noise_mse_los
+    name: full_instr_discrete_loss
   tb_load:
     EVAL_CKPT_PATH_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57/checkpoints/ckpt.14.pth # If this is a directory, evaluate all checkpoints. Else evaluate the specified checkpoint.pth
     EVAL_LOG_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57
@@ -45,6 +45,8 @@ EVAL:
       SUCCESS_DISTANCE: 3.0
       SUCCESS:
         SUCCESS_DISTANCE: 3.0
+      SUCCESS_NO_STOP:
+        SUCCESS_DISTANCE: 3.0
       ORACLE_SUCCESS:
         SUCCESS_DISTANCE: 3.0
       NDTW:
@@ -52,9 +54,9 @@ EVAL:
     ENVIRONMENT:
       MAX_EPISODE_STEPS: 300
   COMMON:
-    SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
+    SIMULATOR_GPU_IDS: [0] # Evals run on these GPUs
     NUM_ENVIRONMENTS: 10 # Number of envs per GPU
-    TORCH_GPU_ID: 2
+    TORCH_GPU_ID: 0
 
 MODEL:
   policy_name: OctoPolicy
@@ -76,11 +78,10 @@ IL:
   batch_size: 5
   epochs: 15
   inflection_weight_coef: 1.9
-  load_from_ckpt: True
+  load_from_ckpt: False
   ckpt_to_load: outputs/rxr_octo_en_subtasks/2024_01_12-14_46_50/checkpoints/ckpt.14.pth
 
   OCTO_TRAINER:
-    action_repr: 'bits' #'one-hot', 'bits'
     scale_bits: 1.0 # used when action_repr=bits
     preload_size: 30
     preload_trajectories_file: False
@@ -114,8 +115,8 @@ train:
       epochs: 15  # Total epochs to run (warmup + decay + cooldown)
       min_lr: 1.0e-5         # k
       warmup_lr: 1.0e-6
-      warmup_epochs: 2
-      cooldown_epochs: 5
+      warmup_epochs: 1
+      cooldown_epochs: 7
 
   grad_clip:
     use: True

@@ -279,7 +279,7 @@ class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
 class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
     def __init__(self, config: Config, octo_config):
         self.octo_config = octo_config
-        self.action_repr = config.IL.OCTO_TRAINER.action_repr
+        self.action_repr = octo_config.model.heads.action.kwargs.action_repr
         super().__init__(config)
         
     def initialize_sims(self):

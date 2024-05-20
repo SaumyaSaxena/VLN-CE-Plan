@@ -108,9 +108,9 @@ class ImageTokenizer(nn.Module):
 
         self.encoder_def = ModuleSpec.instantiate(encoder, device)()
 
-        if not self.finetune_encoder:
-            for p in self.encoder_def.parameters():
-                p.requires_grad_(False)
+        # if not self.finetune_encoder:
+        #     for p in self.encoder_def.parameters():
+        #         p.requires_grad_(False)
 
     def forward(
         self,
@@ -170,13 +170,7 @@ class ImageTokenizer(nn.Module):
             )
 
         # run visual encoder
-        if not self.finetune_encoder:
-            with torch.no_grad():
-                image_tokens = self.encoder_def(enc_inputs.permute(0,3,1,2), **encoder_input_kwargs) # TODO(saumya): permute to change to (b,c,h,w) format. Check!
-        else:
-            image_tokens = self.encoder_def(enc_inputs.permute(0,3,1,2), **encoder_input_kwargs) # TODO(saumya): permute to change to (b,c,h,w) format. Check!
-        
-        image_tokens = image_tokens.permute(0,2,3,1) # TODO(saumya): permute to change back to (b,h,w,c) format. Check!
+        image_tokens = self.encoder_def(enc_inputs, **encoder_input_kwargs) # TODO(saumya): permute to change to (b,c,h,w) format. Check!
         image_tokens = torch.reshape(image_tokens, (b, t, -1, image_tokens.shape[-1]))
 
         if self.use_token_learner:

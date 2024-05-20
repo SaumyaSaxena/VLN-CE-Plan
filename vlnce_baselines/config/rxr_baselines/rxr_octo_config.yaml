@@ -120,10 +120,10 @@ model:
         readout_key: readout_action
         use_map: false
         embedding_size: ${model.token_embedding_size}
-        prediction_type: 'noise' # 'action', 'noise'
-        loss_type: 'mse' # 'l1', 'softmax_cross_ent', 'mse'
+        prediction_type: 'action' # 'action', 'noise'
+        loss_type: 'softmax_cross_ent' # 'l1', 'softmax_cross_ent', 'mse'
       module: vlnce_baselines.models.octo.action_heads
-      name: DiffusionActionHead
+      name: DiscreteActionHead
   max_horizon: 10
   observation_tokenizers:
     primary:
@@ -131,14 +131,15 @@ model:
       kwargs:
         encoder:
           args: []
-          kwargs:
+          kwargs: # overwritten using 'image_encoder_kwargs'
             num_inp_channels: ${num_inp_channels} # NOTE: task_stack_keys is empty
-          module: vlnce_baselines.models.octo.vit_encoders
-          name: SmallStem16
+          module: vlnce_baselines.models.octo.vit_encoders # overwritten using 'image_encoder_kwargs'
+          name: VlnResnetRGBDEncoder
+        num_tokens: 256
         obs_stack_keys:
         - image_primary
         task_stack_keys: []
-        finetune_encoder: True
+        finetune_encoder: True # overwritten; not used
       module: vlnce_baselines.models.octo.tokenizers
       name: ImageTokenizer
   readouts:
@@ -188,5 +189,27 @@ val_kwargs:
 
 image_encoder_kwargs:
   SmallStem16:
-    num_inp_channels: ${num_inp_channels}
-  
+    module: vlnce_baselines.models.octo.vit_encoders
+    num_tokens: 256
+    kwargs:
+      num_inp_channels: ${num_inp_channels}
+      trainable: False
+  VlnResnetRGBDEncoder:
+    module: vlnce_baselines.models.encoders.resnet_encoders
+    num_tokens: 16
+    kwargs:
+      normalize_rgb: False
+      DEPTH_ENCODER:
+        cnn_type: "VlnResnetDepthEncoder"
+        observation_space:
+          shape: (256, 256, 1)
+          low: 0.
+          high: 1.
+        output_size: 128
+        backbone: "resnet50"
+        ddppo_checkpoint: "data/ddppo-models/gibson-2plus-resnet50.pth"
+        trainable: False
+      RGB_ENCODER:
+        cnn_type: "TorchVisionResNet50"
+        output_size: 256
+        trainable: False

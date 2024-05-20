@@ -39,8 +39,10 @@ TASK:
     PATH_LENGTH,
     DISTANCE_TO_GOAL,
     SUCCESS,
+    SUCCESS_NO_STOP,
     ORACLE_SUCCESS,
     SPL_RxR,
+    SPL_RxR_NO_STOP,
     NDTW
   ]
 

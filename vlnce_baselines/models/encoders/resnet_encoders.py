@@ -108,7 +108,6 @@ class VlnResnetDepthEncoder(nn.Module):
                 .view(1, -1, h, w)
                 .expand(b, self.spatial_embeddings.embedding_dim, h, w)
             )
-
             return torch.cat([x, spatial_features], dim=1)
         else:
             return self.visual_fc(x)
@@ -212,7 +211,6 @@ class TorchVisionResNet(nn.Module):
                 .view(1, -1, h, w)
                 .expand(b, self.spatial_embeddings.embedding_dim, h, w)
             )
-
             return torch.cat([resnet_output, spatial_features], dim=1)
         else:
             return self.fc(resnet_output)  # returns [BATCH x OUTPUT_DIM]
@@ -228,8 +226,46 @@ class TorchVisionResNet18(TorchVisionResNet):
         super().__init__(*args, resnet_version="resnet18", **kwargs)
 
 class VlnResnetRGBDEncoder(nn.Module):
-    def __init__(self, *args: Any, **kwargs: Any)
-        pass
+    def __init__(self,
+        normalize_rgb = False,
+        DEPTH_ENCODER = None,
+        RGB_ENCODER = None,
+        device: str = 'cuda',
+    ):
+        super().__init__()
+        depth_space = spaces.Box(
+            low=DEPTH_ENCODER.observation_space.low,
+            high=DEPTH_ENCODER.observation_space.high, 
+            shape=DEPTH_ENCODER.observation_space.shape, 
+            dtype=np.float32
+        )
+        observation_space = spaces.Dict({
+            'depth': depth_space,
+        })
+        self.depth_encoder = eval(DEPTH_ENCODER.cnn_type
+        )(
+            observation_space,
+            output_size=DEPTH_ENCODER.output_size,
+            checkpoint=DEPTH_ENCODER.ddppo_checkpoint,
+            backbone=DEPTH_ENCODER.backbone,
+            trainable=DEPTH_ENCODER.trainable,
+            spatial_output=True,
+        )
 
-    def forward(self, observations: Observations) -> Tensor:
-        pass
+        self.rgb_encoder = eval(RGB_ENCODER.cnn_type
+        )(
+            RGB_ENCODER.output_size,
+            normalize_visual_inputs=normalize_rgb,
+            trainable=RGB_ENCODER.trainable,
+            spatial_output=True,
+        )
+
+        self.num_features = self.depth_encoder.output_shape[0] + self.rgb_encoder.output_shape[0]
+
+    def forward(self, observation):
+        obs = {}
+        obs['depth'] = observation[...,3:] # channel last
+        obs['rgb'] = observation[...,:3] # channel first
+        depth_embedding = self.depth_encoder(obs)
+        rgb_embedding = self.rgb_encoder(obs)
+        return torch.cat([depth_embedding, rgb_embedding], dim=1).permute(0,2,3,1) # permute to change to (b,h,w,c) format

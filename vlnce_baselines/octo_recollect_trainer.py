@@ -25,7 +25,9 @@ from habitat_baselines.rl.ddppo.algo.ddp_utils import is_slurm_batch_job
 from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_batch,
     get_active_obs_transforms,
+    apply_obs_transforms_obs_space,
 )
+
 from habitat.utils.visualizations.utils import append_text_to_image
 
 from vlnce_baselines.common.env_utils import construct_envs_auto_reset_false
@@ -149,8 +151,68 @@ class OctoRecollectTrainer(RecollectTrainer):
                 lr = self.scheduler.get_epoch_values(epoch)[0]
             else:
                 lr = self.scheduler.get_last_lr()[0]
+        else:
+            import ipdb; ipdb.set_trace()
+            lr = self.optimizer.param_groups[0]['lr']
         return lr
 
+    def update_octo_config(self):
+        if 'discrete' in self.octo_config.model.heads.action.kwargs.action_repr:
+            self.octo_config.model.heads.action.kwargs.action_dim = 1
+            self.octo_config.model.heads.action.kwargs.n_classes = 6
+            self.octo_config.model.heads.action.kwargs.max_action = 5
+            self.octo_config.model.heads.action.kwargs.min_action = 0
+        if 'one-hot' in self.octo_config.model.heads.action.kwargs.action_repr:
+            self.octo_config.model.heads.action.kwargs.action_dim = 6
+            self.octo_config.model.heads.action.kwargs.n_classes = 6
+            self.octo_config.model.heads.action.kwargs.max_action = 1
+            self.octo_config.model.heads.action.kwargs.min_action = 0
+        if 'bits' in self.octo_config.model.heads.action.kwargs.action_repr:
+            nbits = int(np.ceil(np.log2(6)))
+            self.octo_config.model.heads.action.kwargs.action_dim = nbits
+            self.octo_config.model.heads.action.kwargs.n_classes = 6
+            self.octo_config.model.heads.action.kwargs.max_action = self.config.IL.OCTO_TRAINER.scale_bits
+            self.octo_config.model.heads.action.kwargs.min_action = -self.config.IL.OCTO_TRAINER.scale_bits
+        
+        obs_transforms = get_active_obs_transforms(self.config)
+        env = get_env_class(self.config.ENV_NAME)(config=self.config)
+        observation_space = apply_obs_transforms_obs_space(
+            env.observation_space, obs_transforms
+        )
+        self.octo_config.image_encoder_kwargs.VlnResnetRGBDEncoder.kwargs.DEPTH_ENCODER.observation_space.shape=observation_space.spaces['depth'].shape
+        self.octo_config.image_encoder_kwargs.VlnResnetRGBDEncoder.kwargs.DEPTH_ENCODER.observation_space.low=float(observation_space.spaces['depth'].low[0,0,0])
+        self.octo_config.image_encoder_kwargs.VlnResnetRGBDEncoder.kwargs.DEPTH_ENCODER.observation_space.high=float(observation_space.spaces['depth'].high[0,0,0])
+
+        encoder_name = self.octo_config.model.observation_tokenizers.primary.kwargs.encoder.name
+        self.octo_config.model.observation_tokenizers.primary.kwargs.encoder.module = self.octo_config['image_encoder_kwargs'][encoder_name]['module']
+        self.octo_config.model.observation_tokenizers.primary.kwargs.encoder.kwargs = self.octo_config['image_encoder_kwargs'][encoder_name]['kwargs']
+
+        self.octo_config.model.observation_tokenizers.primary.kwargs.num_tokens = self.octo_config['image_encoder_kwargs'][encoder_name]['num_tokens']
+    
+    @staticmethod
+    def _pause_envs(envs_to_pause, envs, batch, task, rgb_frames=None):
+        # pausing envs with no new episode
+        if len(envs_to_pause) > 0:
+            state_index = list(range(envs.num_envs))
+            for idx in reversed(envs_to_pause):
+                state_index.pop(idx)
+                envs.pause_at(idx)
+
+            batch["observation"]['image_primary'] = batch["observation"]['image_primary'][state_index]
+            batch["observation"]['bert_tokens'] = batch["observation"]['bert_tokens'][state_index]
+            batch["observation"]['pad_mask'] = batch["observation"]['pad_mask'][state_index]
+            batch["observation"]['pad_mask_dict']['image_primary'] = batch["observation"]['pad_mask_dict']['image_primary'][state_index]
+
+            if "language_instruction" in task.keys():
+                for k, v in task["language_instruction"].items():
+                    task["language_instruction"][k] = v[state_index]
+            task["pad_mask_dict"]["language_instruction"] = task["pad_mask_dict"]["language_instruction"][state_index]
+
+            if rgb_frames is not None:
+                rgb_frames = [rgb_frames[i] for i in state_index]
+
+        return (envs, batch, task, rgb_frames)
+    
     def _initialize_policy(
         self,
         config: Config,
@@ -171,28 +233,14 @@ class OctoRecollectTrainer(RecollectTrainer):
         else:
             self.octo_config = OmegaConf.load(config['OCTO_CONFIG_PATH'])
 
-        self.octo_config.model.heads.action.kwargs.action_repr = config.IL.OCTO_TRAINER.action_repr
-        if 'discrete' in config.IL.OCTO_TRAINER.action_repr:
-            self.octo_config.model.heads.action.kwargs.action_dim = 1
-            self.octo_config.model.heads.action.kwargs.n_classes = 6
-            self.octo_config.model.heads.action.kwargs.max_action = 5
-            self.octo_config.model.heads.action.kwargs.min_action = 0
-        if 'one-hot' in config.IL.OCTO_TRAINER.action_repr:
-            self.octo_config.model.heads.action.kwargs.action_dim = 6
-            self.octo_config.model.heads.action.kwargs.n_classes = 6
-            self.octo_config.model.heads.action.kwargs.max_action = 1
-            self.octo_config.model.heads.action.kwargs.min_action = 0
-        if 'bits' in config.IL.OCTO_TRAINER.action_repr:
-            nbits = int(np.ceil(np.log2(6)))
-            self.octo_config.model.heads.action.kwargs.action_dim = nbits
-            self.octo_config.model.heads.action.kwargs.n_classes = 6
-            self.octo_config.model.heads.action.kwargs.max_action = self.config.IL.OCTO_TRAINER.scale_bits
-            self.octo_config.model.heads.action.kwargs.min_action = -self.config.IL.OCTO_TRAINER.scale_bits
+        self.update_octo_config()
+        if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
+            wandb.config.update({'octo_config': dict(self.octo_config)})
+            wandb.config.update({'main_config': config})
 
         example_batch, dataset_statistics = get_octo_data(self.octo_config.pretrained_ckpt_path)
         self.policy = OctoPolicy.from_config(self.octo_config, example_batch, dataset_statistics, self.device)
         self.policy.to(self.device)
-        # wandb.config.update(opt)
         
         self.print_parameters(self.policy)
         self.optimizer = create_optimizer_with_params(config.train.optimizer, self.policy.get_trainable_parameters())
@@ -264,7 +312,7 @@ class OctoRecollectTrainer(RecollectTrainer):
         self.config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.MAX_SCENE_REPEAT_STEPS = (
             -1
         )
-        self.config.train.scheduler.timm_cosine.epochs = self.config.IL.epochs # TODO: why is this not updating in cfg
+        self.config.train.scheduler.timm_cosine.epochs = self.config.IL.epochs # TODO(saumya): why is this not updating in cfg
         
         self.config.freeze()
 
@@ -292,15 +340,13 @@ class OctoRecollectTrainer(RecollectTrainer):
                 purge_step=0,
             )
         
-
-        self.print_cuda_memory("BEFORE POLICY INITIALIZATION")
         self._initialize_policy(
                 self.config,
                 self.config.IL.load_from_ckpt
             )
         self.policy.train()
-        self.print_cuda_memory("AFTER POLICY INITIALIZATION")
 
+        # Note: Always initialize policy before dataset
         dataset = OctoTeacherRecollectionDataset(self.config, self.octo_config)
         collate_fn = MyCollator(dataset.obs_transforms, self.device)
         diter = iter(
@@ -325,7 +371,6 @@ class OctoRecollectTrainer(RecollectTrainer):
                 " should be a multiple of batch_size."
             )
 
-        AuxLosses.activate()
         batches_per_epoch = dataset.length // dataset.batch_size
 
         for epoch in range(self.start_epoch, self.config.IL.epochs):
@@ -378,7 +423,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                     },
                     dataset.obs_transforms,
                 )
-                batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1)
+                batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1) # TODO(saumya): this will not be needed if history was included already
                 del observations_batch, instructions
 
                 if (
@@ -423,8 +468,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 
                 if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
                     optim_logs = {'epoch': epoch}
-                    if self.scheduler:
-                        optim_logs['optim/lr'] = self.get_current_learning_rate(epoch)
+                    optim_logs['optim/lr'] = self.get_current_learning_rate(epoch)
 
                     log_dict = {'train_loss': action_loss}
                     log_dict.update(metrics_dict)
@@ -436,8 +480,6 @@ class OctoRecollectTrainer(RecollectTrainer):
                     if epoch_logs.get(k) is None:
                         epoch_logs[k] = []
                     epoch_logs[k].append(v.item())
-                if self.scheduler is not None:
-                    epoch_logs['optim/lr'].append(self.get_current_learning_rate(epoch))
 
                 self.step_id += 1  # noqa: SIM113
                 del action_loss, metrics_dict
@@ -449,8 +491,6 @@ class OctoRecollectTrainer(RecollectTrainer):
             metric = sum(epoch_logs['loss'])/len(epoch_logs['loss'])
             self.save_checkpoint(epoch, self.step_id, ckpt_save_dir, metric, self.config.wandb.saver.upload)
 
-
-        AuxLosses.deactivate()
         dataset.close_sims()
         if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
             tb_writer.exit()
@@ -716,9 +756,9 @@ class OctoRecollectTrainer(RecollectTrainer):
         start_time = time.time()
 
         actions_all_envs = [[] for _ in range(envs.num_envs)]
+        step = 0
         while envs.num_envs > 0 and len(stats_episodes) < num_eps:
             current_episodes = envs.current_episodes()
-            # import ipdb; ipdb.set_trace()
             with torch.no_grad():
                 actions = self.policy.sample_actions(
                     batch["observation"],
@@ -726,10 +766,9 @@ class OctoRecollectTrainer(RecollectTrainer):
                     batch["observation"]["pad_mask"],
                     argmax = True,
                 )
-
             outputs = envs.step([a[0].item() for a in actions])
             observations, _, dones, infos = [list(x) for x in zip(*outputs)]
-
+            log_keys = [k for k in infos[0].keys() if 'agent' not in k]
             # reset envs and observations if necessary
             for i in range(envs.num_envs):
                 if config.EVAL.SAVE_VIDEO:
@@ -739,8 +778,11 @@ class OctoRecollectTrainer(RecollectTrainer):
                     rgb_frames[i].append(frame)
                     actions_all_envs[i].append(actions[i][0].item())
 
-                if not dones[i]:
+                done_eval_i = envs.call_at(i, "get_done_eval", None)
+                # if not dones[i]:
+                if not done_eval_i:
                     continue
+                step += 1
 
                 ep_id = current_episodes[i].episode_id
                 stats_episodes[ep_id] = infos[i]
@@ -765,7 +807,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                         images=rgb_frames[i],
                         episode_id=ep_id,
                         checkpoint_idx=0,
-                        metrics={"spl": stats_episodes[ep_id]["spl_rxr"]},
+                        metrics={"spl": stats_episodes[ep_id]["spl_rxr_no_stop"]},
                         tb_writer=tb_writer,
                     )
                     del stats_episodes[ep_id]["top_down_map_vlnce"]
@@ -774,14 +816,11 @@ class OctoRecollectTrainer(RecollectTrainer):
 
                 if 'wandb' in self.config.EVAL.logger_type:
                     log_dict = {}
-                    for m in stats_episodes[ep_id].keys():
-                        if 'agent' in m:
-                            continue
-                        else:
-                            log_dict[m] = stats_episodes[ep_id][m]
+                    for m in log_keys:
+                        log_dict[m] = stats_episodes[ep_id][m]
+                        log_dict[f'{m}_aggr'] = np.sum(stats_episodes[k][m] for k in stats_episodes.keys()) / len(stats_episodes.keys())
                     log_dict["episode_id"] = int(ep_id)
-                    wandb.log(log_dict)
-
+                    wandb.log(log_dict, step=step)
 
             observations = extract_instruction_tokens(
                 observations,
@@ -798,22 +837,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 if next_episodes[i].episode_id in stats_episodes:
                     envs_to_pause.append(i)
 
-            # (
-            #     envs,
-            #     _,
-            #     _,
-            #     _,
-            #     batch,
-            #     rgb_frames,
-            # ) = self._pause_envs(
-            #     envs_to_pause,
-            #     envs,
-            #     None,
-            #     None,
-            #     None,
-            #     batch,
-            #     rgb_frames,
-            # )
+            (envs, batch, task, rgb_frames) = self._pause_envs(envs_to_pause, envs, batch, task, rgb_frames)
 
         envs.close()
         if config.use_pbar:
@@ -821,19 +845,13 @@ class OctoRecollectTrainer(RecollectTrainer):
 
         aggregated_stats = {}
         num_episodes = len(stats_episodes)
-        for k in next(iter(stats_episodes.values())).keys():
-            if k == 'agent_rotation' or k == 'agent_position':
-                continue
-            else:
-                aggregated_stats[k] = (
+        for k in log_keys:
+            aggregated_stats[f'{k}_aggr'] = (
                     np.sum(v[k] for v in stats_episodes.values()) / num_episodes
                 )
         
         if 'wandb' in self.config.EVAL.logger_type:
-            log_dict = {}
-            for k in aggregated_stats.keys():
-                log_dict[f'{k}_aggr'] = aggregated_stats[k]
-            wandb.log(log_dict)
+            wandb.log(aggregated_stats, step=step+1)
 
         if config.EVAL.SAVE_RESULTS:
             with open(fname, "w") as f:

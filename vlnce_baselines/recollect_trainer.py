@@ -132,7 +132,6 @@ class RecollectTrainer(BaseVLNCETrainer):
                 num_workers=1,
             )
         )
-
         self._initialize_policy(
             self.config,
             self.config.IL.load_from_ckpt,
@@ -473,7 +472,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                             time=round(time.time() - start_time),
                         )
                     )
-                spl = stats_episodes[ep_id]["spl_rxr"]
+                spl = stats_episodes[ep_id]["spl_rxr_no_stop"]
 
                 if config.EVAL.SAVE_RESULTS:
                     f.write(f"Episode id: {ep_id}. SPL: {spl}\n")
@@ -485,7 +484,7 @@ class RecollectTrainer(BaseVLNCETrainer):
                         images=rgb_frames_to_save[i],
                         episode_id=ep_id,
                         checkpoint_idx=checkpoint_index,
-                        metrics={"spl": stats_episodes[ep_id]["spl_rxr"]},
+                        metrics={"spl": stats_episodes[ep_id]["spl_rxr_no_stop"]},
                         tb_writer=writer,
                     )
                     del stats_episodes[ep_id]["top_down_map_vlnce"]

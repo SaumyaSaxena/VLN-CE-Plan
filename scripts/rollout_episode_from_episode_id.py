@@ -120,7 +120,6 @@ if __name__== "__main__":
                 rgb_frames[i].append(frame)
             
             if dones[i]:
-                # print("_ep_ids", _ep_ids)
                 if save_video:
                     print("Saving episode id", current_episodes[i].episode_id)
                     if subtasks:
