@@ -56,9 +56,10 @@ with warnings.catch_warnings():
 from omegaconf import OmegaConf
 
 class MyCollator(object):
-    def __init__(self, obs_transforms, device):
+    def __init__(self, obs_transforms, octo_config, device):
         self.obs_transforms = obs_transforms
         self.device = device
+        self.octo_config = octo_config
     
     def __call__(self, batch):
         """Each sample in batch: (
@@ -69,54 +70,76 @@ class MyCollator(object):
             inflec_weight,
         )
         """
+        
         transposed = list(zip(*batch))
 
         observations_batch = list(transposed[0])
-        prev_actions_batch = list(transposed[1])
-        corrected_actions_batch = list(transposed[2])
+        # prev_actions_batch = list(transposed[1])
+        # corrected_actions_batch = list(transposed[2])
         actions_for_training = list(transposed[3])
         # weights_batch = list(transposed[4])
         instructions_batch = list(transposed[5])
         
-        B = len(prev_actions_batch)
+        B = len(observations_batch)
 
-        # Transpose observations
+        # Transpose observations. Add history
         new_observations_batch = defaultdict(list)
         for sensor in observations_batch[0]:
             for bid in range(B):
-                new_observations_batch[sensor].append(
-                    observations_batch[bid][sensor]
-                )
+                traj_len = observations_batch[bid][sensor].shape[0] - (self.octo_config.window_size - 1)
+                if 'rxr_instruction' in sensor: # don't chunk bert_tokens
+                    new_observations_batch[sensor].append(
+                        observations_batch[bid][sensor][:traj_len]
+                    )
+                else:
+                    curr_step = torch.arange(traj_len)
+                    obs_offset = torch.arange(self.octo_config.window_size)
+                    chunk_indices = curr_step[:, None] + obs_offset[None, :]
+
+                    new_observations_batch[sensor].append(
+                        observations_batch[bid][sensor][chunk_indices]
+                    )
+
         observations_batch = new_observations_batch
         for sensor in observations_batch:
             observations_batch[sensor] = torch.cat(
                 observations_batch[sensor], dim=0
             )
 
-        corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
-        actions_for_training = torch.cat(actions_for_training, dim=0)
+        # corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
+        actions_with_horizon = []
+        for bid in range(B):
+            traj_len = actions_for_training[bid].shape[0] - (self.octo_config.window_size - 1)
+            curr_step = torch.arange(traj_len)
+            obs_offset = torch.arange(self.octo_config.window_size + self.octo_config.pred_horizon - 1)
+            chunk_indices = torch.minimum(
+                torch.tensor(actions_for_training[bid].shape[0]-1),
+                (curr_step[:, None] + obs_offset[None, :])
+            ) # repeat last action which should be STOP action
+            actions_with_horizon.append(actions_for_training[bid][chunk_indices])
+        actions_with_horizon = torch.cat(actions_with_horizon, dim=0)
 
         final_obs_batch = dict()
         final_obs_batch["observation"] = dict()
-        # appending rgb and depth together and creating history dimension. Shape: (b, history=1, h, w, 4)
-        # final_obs_batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1)
+        # rgb and depth Shape: (b, window_size, h, w, 4)
         final_obs_batch["observation"]['rgb'] = observations_batch['rgb']
         final_obs_batch["observation"]['depth'] = observations_batch['depth']
         
+        # rxr_instruction Shape: (b, n_tokens, features)
         final_obs_batch["observation"]['bert_tokens'] = observations_batch['rxr_instruction']
 
         batch_size = observations_batch['rgb'].shape[0]
-        # Pad mask for the whole batch with history=1
-        final_obs_batch["observation"]['pad_mask'] = torch.ones((batch_size,1), dtype=bool)
+        # Pad mask for the whole batch with window_size
+        final_obs_batch["observation"]['pad_mask'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool)
         final_obs_batch["observation"]['pad_mask_dict'] = dict()
-        final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,1), dtype=bool)
+        final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool)
 
-        # final_obs_batch['task'] = tasks_batch
-        final_obs_batch['action'] = actions_for_training.unsqueeze(1)
+        final_obs_batch['action'] = actions_with_horizon # add prediction horizon  Shape: (b, pred_horizon=1, action_dim)
 
         instructions_batch_flat = []
         for row in instructions_batch:
-            instructions_batch_flat += row
+            traj_len = len(row) - (self.octo_config.window_size - 1)
+            instructions_batch_flat += row[:traj_len]
 
         return final_obs_batch, instructions_batch_flat
     
@@ -152,7 +175,6 @@ class OctoRecollectTrainer(RecollectTrainer):
             else:
                 lr = self.scheduler.get_last_lr()[0]
         else:
-            import ipdb; ipdb.set_trace()
             lr = self.optimizer.param_groups[0]['lr']
         return lr
 
@@ -224,7 +246,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 logger.info(f"Run path: {self.config.EVAL.wandb_load.run_path}. File: {self.config.EVAL.wandb_load.file}")
                 ckpt_file = wandb.restore(str(self.config.EVAL.wandb_load.file), run_path=self.config.EVAL.wandb_load.run_path,
                     root=eval_dir, replace=False)
-                ckpt = torch.load(ckpt_file.name)
+                ckpt = torch.load(ckpt_file.name, map_location=self.device)
             
             if 'tb' in self.config.IL.OCTO_TRAINER.logger_type:
                 logger.info(f"checkpoint_path: {self.config.EVAL.tb_load.EVAL_CKPT_PATH_DIR}")
@@ -348,7 +370,7 @@ class OctoRecollectTrainer(RecollectTrainer):
 
         # Note: Always initialize policy before dataset
         dataset = OctoTeacherRecollectionDataset(self.config, self.octo_config)
-        collate_fn = MyCollator(dataset.obs_transforms, self.device)
+        collate_fn = MyCollator(dataset.obs_transforms, self.octo_config, self.device)
         diter = iter(
             torch.utils.data.DataLoader(
                 dataset,
@@ -423,7 +445,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                     },
                     dataset.obs_transforms,
                 )
-                batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1)).unsqueeze(1) # TODO(saumya): this will not be needed if history was included already
+                batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1))
                 del observations_batch, instructions
 
                 if (
@@ -680,7 +702,7 @@ class OctoRecollectTrainer(RecollectTrainer):
             logger.info(f"Run path: {self.config.EVAL.wandb_load.run_path}. File: {self.config.EVAL.wandb_load.file}")
             ckpt_file = wandb.restore(str(self.config.EVAL.wandb_load.file), run_path=self.config.EVAL.wandb_load.run_path,
                 root=eval_dir, replace=False)
-            ckpt = torch.load(ckpt_file.name)
+            ckpt = torch.load(ckpt_file.name, map_location=self.device)
         else:
             logger.info(f"checkpoint_path: {self.config.EVAL.EVAL_CKPT_PATH_DIR}")
             ckpt = self.load_checkpoint(self.config.EVAL.EVAL_CKPT_PATH_DIR, map_location='cpu')

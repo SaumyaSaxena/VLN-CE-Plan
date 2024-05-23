@@ -2,7 +2,7 @@ BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_subtasks.yaml
 TRAINER_NAME: recollect_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
 TORCH_GPU_ID: 2
-NUM_ENVIRONMENTS: 5 # Number of envs per GPU
+NUM_ENVIRONMENTS: 20 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_cma_en_subtasks
 CHECKPOINT_FOLDER: outputs/rxr_cma_en_subtasks
 
@@ -51,7 +51,7 @@ RL:
       ENABLED_TRANSFORMS: [ResizeShortestEdge, CenterCropperPerSensor]
 
 IL:
-  batch_size: 4
+  batch_size: 20
   epochs: 15
   inflection_weight_coef: 1.9
   load_from_ckpt: False

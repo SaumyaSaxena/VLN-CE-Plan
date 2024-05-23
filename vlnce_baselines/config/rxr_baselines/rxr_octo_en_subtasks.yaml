@@ -10,7 +10,7 @@ OCTO_CONFIG_PATH: '/home/saumyas/Projects/VLN-CE-Plan/vlnce_baselines/config/rxr
 
 wandb:
   entity: iam-lab
-  group: octo
+  group: octo_subtasks
   project: vlnce_plan
   name: octo_subtasks
   saver:
@@ -30,33 +30,33 @@ EVAL:
   SAVE_RESULTS: False
   logger_type: 'wandb' # 'wandb', 'tb'
   wandb_load:
-    run_path: 'iam-lab/vlnce_plan/hd9r6ub5'
-    file: checkpoints/ckpt_epoch_3_step_60300_action_loss_1.146.pth
+    run_path: 'iam-lab/vlnce_plan/wbjwe454'
+    file: checkpoints/ckpt_epoch_0_step_12060_action_loss_3.535.pth
     entity: iam-lab
     project: vlnce_plan_eval
     group: octo
-    name: subtasks
+    name: subtasks_diffusion_action_head_SuccDist_1
   tb_load:
     EVAL_CKPT_PATH_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57/checkpoints/ckpt.14.pth # If this is a directory, evaluate all checkpoints. Else evaluate the specified checkpoint.pth
     EVAL_LOG_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57
 
   EVAL_TASK_CONFIG:
     TASK:
-      SUCCESS_DISTANCE: 2.0
+      SUCCESS_DISTANCE: 1.0
       SUCCESS:
-        SUCCESS_DISTANCE: 2.0
+        SUCCESS_DISTANCE: 1.0
       SUCCESS_NO_STOP:
-        SUCCESS_DISTANCE: 2.0
+        SUCCESS_DISTANCE: 1.0
       ORACLE_SUCCESS:
-        SUCCESS_DISTANCE: 2.0
+        SUCCESS_DISTANCE: 1.0
       NDTW:
-        SUCCESS_DISTANCE: 2.0
+        SUCCESS_DISTANCE: 1.0
     ENVIRONMENT:
       MAX_EPISODE_STEPS: 300
   COMMON:
-    SIMULATOR_GPU_IDS: [0] # Evals run on these GPUs
+    SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
     NUM_ENVIRONMENTS: 10 # Number of envs per GPU
-    TORCH_GPU_ID: 0
+    TORCH_GPU_ID: 2
 
 MODEL:
   policy_name: OctoPolicy

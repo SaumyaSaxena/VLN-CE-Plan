@@ -387,8 +387,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
                 path_step = self.trajectories[current_episodes[i].episode_id][
                     self.env_step[i]
                 ]
-                one_hot_action = np.zeros(6)
-                one_hot_action[path_step[2]] = 1
+
                 self._env_observations[i].append(
                     (
                         observations[i],

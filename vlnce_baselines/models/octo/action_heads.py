@@ -403,9 +403,12 @@ class DiffusionActionHead(nn.Module):
             if 'bits' in self.action_repr:
                 bits = action_tokens > 0
                 action_tokens = bits2int(bits)
-                action_tokens = torch.clip(action_tokens, 0, self.n_classes-1)
+                action_tokens = torch.clip(action_tokens, 0, self.n_classes-1)[:,-1]
+            
+            if 'one-hot' in self.action_repr:
+                action_tokens = torch.argmax(action_tokens[:,-1,0], axis=-1, keepdim=True)
 
-            return action_tokens[:,-1]
+            return action_tokens
 
         actions = sample_actions(device)
         return actions
