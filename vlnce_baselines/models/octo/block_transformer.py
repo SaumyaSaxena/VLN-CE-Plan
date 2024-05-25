@@ -202,7 +202,9 @@ class BlockTransformer(nn.Module):
         all_prefix_outputs, all_timestep_outputs = self.split_output_tokens(
             output, prefix_groups, timestep_groups
         )
-
+        
+        with torch.cuda.device(self.device):
+            torch.cuda.empty_cache()
         return all_prefix_outputs, all_timestep_outputs
 
     def assemble_input_tokens(

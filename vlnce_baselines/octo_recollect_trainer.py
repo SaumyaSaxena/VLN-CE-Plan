@@ -56,10 +56,8 @@ with warnings.catch_warnings():
 from omegaconf import OmegaConf
 
 class MyCollator(object):
-    def __init__(self, obs_transforms, octo_config, device):
-        self.obs_transforms = obs_transforms
-        self.device = device
-        self.octo_config = octo_config
+    def __init__(self):
+        pass
     
     def __call__(self, batch):
         """Each sample in batch: (
@@ -80,68 +78,7 @@ class MyCollator(object):
         # weights_batch = list(transposed[4])
         instructions_batch = list(transposed[5])
         
-        B = len(observations_batch)
-
-        # Transpose observations. Add history
-        new_observations_batch = defaultdict(list)
-        for sensor in observations_batch[0]:
-            for bid in range(B):
-                traj_len = observations_batch[bid][sensor].shape[0] - (self.octo_config.window_size - 1)
-                if 'rxr_instruction' in sensor: # don't chunk bert_tokens
-                    new_observations_batch[sensor].append(
-                        observations_batch[bid][sensor][:traj_len]
-                    )
-                else:
-                    curr_step = torch.arange(traj_len)
-                    obs_offset = torch.arange(self.octo_config.window_size)
-                    chunk_indices = curr_step[:, None] + obs_offset[None, :]
-
-                    new_observations_batch[sensor].append(
-                        observations_batch[bid][sensor][chunk_indices]
-                    )
-
-        observations_batch = new_observations_batch
-        for sensor in observations_batch:
-            observations_batch[sensor] = torch.cat(
-                observations_batch[sensor], dim=0
-            )
-
-        # corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
-        actions_with_horizon = []
-        for bid in range(B):
-            traj_len = actions_for_training[bid].shape[0] - (self.octo_config.window_size - 1)
-            curr_step = torch.arange(traj_len)
-            obs_offset = torch.arange(self.octo_config.window_size + self.octo_config.pred_horizon - 1)
-            chunk_indices = torch.minimum(
-                torch.tensor(actions_for_training[bid].shape[0]-1),
-                (curr_step[:, None] + obs_offset[None, :])
-            ) # repeat last action which should be STOP action
-            actions_with_horizon.append(actions_for_training[bid][chunk_indices])
-        actions_with_horizon = torch.cat(actions_with_horizon, dim=0)
-
-        final_obs_batch = dict()
-        final_obs_batch["observation"] = dict()
-        # rgb and depth Shape: (b, window_size, h, w, 4)
-        final_obs_batch["observation"]['rgb'] = observations_batch['rgb']
-        final_obs_batch["observation"]['depth'] = observations_batch['depth']
-        
-        # rxr_instruction Shape: (b, n_tokens, features)
-        final_obs_batch["observation"]['bert_tokens'] = observations_batch['rxr_instruction']
-
-        batch_size = observations_batch['rgb'].shape[0]
-        # Pad mask for the whole batch with window_size
-        final_obs_batch["observation"]['pad_mask'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool)
-        final_obs_batch["observation"]['pad_mask_dict'] = dict()
-        final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool)
-
-        final_obs_batch['action'] = actions_with_horizon # add prediction horizon  Shape: (b, pred_horizon=1, action_dim)
-
-        instructions_batch_flat = []
-        for row in instructions_batch:
-            traj_len = len(row) - (self.octo_config.window_size - 1)
-            instructions_batch_flat += row[:traj_len]
-
-        return final_obs_batch, instructions_batch_flat
+        return observations_batch, actions_for_training, instructions_batch
     
 @baseline_registry.register_trainer(name="octo_trainer")
 class OctoRecollectTrainer(RecollectTrainer):
@@ -318,6 +255,89 @@ class OctoRecollectTrainer(RecollectTrainer):
             if upload_to_wandb:
                 wandb.save(save_file_name, base_path=os.path.join(ckpt_save_dir, '..'))
 
+    def chunk_and_transform_batch(self, observations_batch, action_batch, instructions_batch, obs_transforms):
+
+        B = len(observations_batch)
+
+        transformed_rgbd_batch = [apply_obs_transforms_batch(
+            {
+                'rgb': observations_batch[bid]['rgb'].to(device=self.device, non_blocking=True),
+                'depth': observations_batch[bid]['depth'].to(device=self.device, non_blocking=True),
+            },
+            obs_transforms,
+        ) for bid in range(B)]
+
+        new_observations_batch = defaultdict(list)
+        for sensor in observations_batch[0]:
+            for bid in range(B):
+                traj_len = observations_batch[bid][sensor].shape[0] - (self.octo_config.window_size - 1)
+                if 'rxr_instruction' in sensor: # don't chunk bert_tokens
+                    new_observations_batch[sensor].append(
+                        observations_batch[bid][sensor][:traj_len]
+                    )
+                else:
+                    curr_step = torch.arange(traj_len)
+                    obs_offset = torch.arange(self.octo_config.window_size)
+                    chunk_indices = curr_step[:, None] + obs_offset[None, :]
+
+                    new_observations_batch[sensor].append(
+                        transformed_rgbd_batch[bid][sensor][chunk_indices]
+                    )
+
+        observations_batch = new_observations_batch
+        for sensor in observations_batch:
+            observations_batch[sensor] = torch.cat(
+                observations_batch[sensor], dim=0
+            ).to(device=self.device, non_blocking=True)
+
+        # corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
+        actions_with_horizon = []
+        for bid in range(B):
+            traj_len = action_batch[bid].shape[0] - (self.octo_config.window_size - 1)
+            curr_step = torch.arange(traj_len)
+            obs_offset = torch.arange(self.octo_config.window_size + self.octo_config.pred_horizon - 1)
+            chunk_indices = torch.minimum(
+                torch.tensor(action_batch[bid].shape[0]-1),
+                (curr_step[:, None] + obs_offset[None, :])
+            ) # repeat last action which should be STOP action
+            actions_with_horizon.append(action_batch[bid][chunk_indices])
+        actions_with_horizon = torch.cat(actions_with_horizon, dim=0).to(device=self.device, non_blocking=True)
+
+        final_obs_batch = dict()
+        final_obs_batch["observation"] = dict()
+        # rgb and depth Shape: (b, window_size, h, w, 4)
+        final_obs_batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1))
+        
+        # rxr_instruction Shape: (b, n_tokens, features)
+        final_obs_batch["observation"]['bert_tokens'] = observations_batch['rxr_instruction']
+
+        batch_size = observations_batch['rgb'].shape[0]
+        # Pad mask for the whole batch with window_size
+        final_obs_batch["observation"]['pad_mask'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool).to(device=self.device, non_blocking=True)
+        final_obs_batch["observation"]['pad_mask_dict'] = dict()
+        final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool).to(device=self.device, non_blocking=True)
+
+        final_obs_batch['action'] = actions_with_horizon # add prediction horizon  Shape: (b, pred_horizon=1, action_dim)
+
+        instructions_batch_flat = []
+        for row in instructions_batch:
+            traj_len = len(row) - (self.octo_config.window_size - 1)
+            instructions_batch_flat += row[:traj_len]
+
+        if "t5" in self.octo_config.model.task_tokenizers.language.kwargs.encoder:
+            task = {"language_instruction": [], "pad_mask_dict": {"language_instruction": []}}
+            task["language_instruction"] = self.policy.text_processor.encode(instructions_batch_flat)
+            for k, v in task["language_instruction"].items():
+                task["language_instruction"][k] = v.to(device=self.device, non_blocking=True)
+        else:
+            task = {"pad_mask_dict": {"language_instruction": []}}
+        
+        task["pad_mask_dict"]["language_instruction"] = torch.ones(
+            len(instructions_batch_flat), dtype=bool
+        ).to(device=self.device, non_blocking=True)
+
+        return final_obs_batch, task
+    
     def train(self) -> None:
         split = self.config.TASK_CONFIG.DATASET.SPLIT
         self.config.defrost()
@@ -370,7 +390,7 @@ class OctoRecollectTrainer(RecollectTrainer):
 
         # Note: Always initialize policy before dataset
         dataset = OctoTeacherRecollectionDataset(self.config, self.octo_config)
-        collate_fn = MyCollator(dataset.obs_transforms, self.octo_config, self.device)
+        collate_fn = MyCollator()
         diter = iter(
             torch.utils.data.DataLoader(
                 dataset,
@@ -417,36 +437,14 @@ class OctoRecollectTrainer(RecollectTrainer):
                 batch_time = time.time()
                 batch_str = f"{batch_idx + 1}/{batches_per_epoch}"
 
-                batch, instructions = next(diter)
-
-                if "t5" in self.octo_config.model.task_tokenizers.language.kwargs.encoder:
-                    task = {"language_instruction": [], "pad_mask_dict": {"language_instruction": []}}
-                    task["language_instruction"] = self.policy.text_processor.encode(instructions)
-                    for k, v in task["language_instruction"].items():
-                        task["language_instruction"][k] = v.to(device=self.device, non_blocking=True)
-                else:
-                    task = {"pad_mask_dict": {"language_instruction": []}}
-                task["pad_mask_dict"]["language_instruction"] = torch.ones(
-                    len(instructions), dtype=bool
-                ).to(device=self.device, non_blocking=True)
-
-                for k, v in batch["observation"].items():
-                    if "pad_mask_dict" not in k:
-                        batch["observation"][k] = v.to(device=self.device, non_blocking=True)
-                
-                for k, v in batch["observation"]['pad_mask_dict'].items():
-                    batch["observation"]['pad_mask_dict'][k] = v.to(device=self.device, non_blocking=True)
-                
-                batch['action'] = batch['action'].to(device=self.device, non_blocking=True)
-                observations_batch = apply_obs_transforms_batch(
-                    {
-                        'rgb': batch["observation"]['rgb'],
-                        'depth': batch["observation"]['depth'],
-                    },
-                    dataset.obs_transforms,
+                observations_batch, action_batch, instructions_batch = next(diter)
+                batch, task = self.chunk_and_transform_batch(
+                    observations_batch, 
+                    action_batch, 
+                    instructions_batch, 
+                    dataset.obs_transforms
                 )
-                batch["observation"]['image_primary'] = (torch.cat((observations_batch['rgb'], observations_batch['depth']), dim=-1))
-                del observations_batch, instructions
+                del observations_batch, action_batch, instructions_batch
 
                 if (
                     self.config.IL.OCTO_TRAINER.effective_batch_size
@@ -468,7 +466,6 @@ class OctoRecollectTrainer(RecollectTrainer):
                     step_grad=step_grad,
                     loss_accumulation_scalar=loss_accumulation_scalar,
                 )
-
                 del batch, task
                 with torch.cuda.device(self.device):
                     torch.cuda.empty_cache()
@@ -536,7 +533,7 @@ class OctoRecollectTrainer(RecollectTrainer):
         )
 
         action_loss.backward()
-        del transformer_embeddings
+        # del transformer_embeddings
         if step_grad:
             if self.use_grad_clip:
                 torch.nn.utils.clip_grad_norm_(

@@ -278,9 +278,12 @@ class DiffusionActionHead(nn.Module):
             ).to(self.device)
 
         pred_eps = self.diffusion_model(embeddings, noisy_actions, time, train=train)
+        pred_eps = rearrange(
+            pred_eps, "b w (p a) -> b w p a", p=self.pred_horizon, a=self.n_classes
+        )
 
         if 'bits' in self.action_repr:
-            pred_eps_post = torch.einsum('bwd,do->bwo', F.softmax(pred_eps, dim=-1), self.bits)
+            pred_eps_post = torch.einsum('bwpn,na->bwpa', F.softmax(pred_eps, dim=-1), self.bits)
             pred_eps_post = (pred_eps_post * 2 - 1) * self.max_action
             return pred_eps, pred_eps_post
         else:
@@ -325,9 +328,11 @@ class DiffusionActionHead(nn.Module):
             transformer_outputs, train=train, time=time, noisy_actions=noisy_actions
         )
 
+        pred_eps_post_flat = rearrange(pred_eps_post, "b w p a -> b w (p a)")
+
         if 'mse' in self.loss_type or 'l1' in self.loss_type:
             loss, metrics = continuous_loss(
-                pred_eps_post,
+                pred_eps_post_flat,
                 noise,
                 actions_flat,
                 pad_mask[:, :, None],
@@ -339,8 +344,8 @@ class DiffusionActionHead(nn.Module):
             loss, metrics = softmax_cross_entropy_loss(
                 pred_eps,
                 noise,
-                actions_flat,
-                pad_mask,
+                actions_chunked,
+                pad_mask[:, :, None],
                 pred_type=self.prediction_type,
                 action_repr=self.action_repr,
             )
@@ -365,15 +370,16 @@ class DiffusionActionHead(nn.Module):
             
             input_time = torch.broadcast_to(time_now, (*current_x.shape[:-1], 1))
             eps_pred, eps_pred_post = self(transformer_outputs, input_time, current_x, train=train)
+            pred_eps_post_flat = rearrange(eps_pred_post, "b w p a -> b w (p a)")
             
             if 'noise' in self.prediction_type:
                 alpha_1 = 1 / torch.sqrt(self.alphas[time_now])
                 alpha_2 = (1 - self.alphas[time_now]) / (torch.sqrt(1 - self.alpha_hats[time_now]))
-                current_x = alpha_1 * (current_x - alpha_2 * eps_pred_post)
+                current_x = alpha_1 * (current_x - alpha_2 * pred_eps_post_flat)
             elif 'action' in self.prediction_type:
                 alpha_1 = 1 / (torch.sqrt(1 - self.alpha_hats[time_now]))
-                eps = alpha_1 * (current_x - torch.sqrt(self.alpha_hats[time_now]) * eps_pred_post)
-                current_x = torch.sqrt(self.alpha_hats[time_next]) * eps_pred_post + (torch.sqrt(1 - self.alpha_hats[time_next])) * eps
+                eps = alpha_1 * (current_x - torch.sqrt(self.alpha_hats[time_now]) * pred_eps_post_flat)
+                current_x = torch.sqrt(self.alpha_hats[time_next]) * pred_eps_post_flat + (torch.sqrt(1 - self.alpha_hats[time_next])) * eps
 
             z = torch.randn(current_x.shape).to(device=device)
             current_x = current_x + (time_now > 0) * (torch.sqrt(self.betas[time_now]) * z)
@@ -486,7 +492,7 @@ def discrete_loss(
 def softmax_cross_entropy_loss(
     pred_logits,
     noise,
-    actions_flat,
+    actions,
     mask,
     pred_type='action',
     action_repr='bits',
@@ -499,30 +505,19 @@ def softmax_cross_entropy_loss(
     """
     if 'action' in pred_type:
         if 'bits' in action_repr: # actions_flat is in bits
-            labels = bits2int(actions_flat > 0)
+            labels = bits2int(actions > 0)
         else:
-            labels = torch.argmax(actions_flat, axis=-1)
-        # labels_one_hot = torch.nn.functional.one_hot(labels, logits.shape[-1])
+            labels = torch.argmax(actions, axis=-1)
 
         cross_ent_loss = torch.nn.CrossEntropyLoss(reduction='none')
 
-        logits_flat = rearrange(
+        logits_channel_first = rearrange(
             pred_logits,
-            "b w a -> (b w) a"
+            "b w p a -> b a w p"
         )
 
-        labels_flat = rearrange(
-            labels,
-            "b w -> (b w)"
-        )
-        loss = cross_ent_loss(logits_flat, labels_flat) 
-        loss = rearrange(
-            loss,
-            "(b w) -> b w",
-            b = labels.shape[0],
-            w = labels.shape[1]
-        )
-
+        loss = cross_ent_loss(logits_channel_first, labels) 
+        
         loss = masked_mean(loss, mask)
 
         # compute accuracy between predicted actions and target actions

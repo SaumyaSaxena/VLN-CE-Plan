@@ -322,7 +322,8 @@ class OctoTransformer(nn.Module):
             ],
             axis=-2,
         )
-
+        with torch.cuda.device(self.device):
+            torch.cuda.empty_cache()
         return outputs
 
     def _create_positional_embedding(self, name: str, tokens: torch.Tensor):

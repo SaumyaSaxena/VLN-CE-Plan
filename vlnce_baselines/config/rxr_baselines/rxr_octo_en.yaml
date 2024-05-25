@@ -1,8 +1,8 @@
 BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_task.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
-TORCH_GPU_ID: 0
-NUM_ENVIRONMENTS: 1 # Number of envs per GPU
+TORCH_GPU_ID: 2
+NUM_ENVIRONMENTS: 5 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en
 CHECKPOINT_FOLDER: outputs/rxr_octo_en
 CONTEXT_LEARNING: False
@@ -75,7 +75,7 @@ RL:
           depth: (256, 256)
 
 IL:
-  batch_size: 5
+  batch_size: 2
   epochs: 15
   inflection_weight_coef: 1.9
   load_from_ckpt: False
@@ -87,7 +87,7 @@ IL:
     preload_trajectories_file: False
     trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories.json.gz
     max_traj_len: 250  # 1.3% of episodes in the English training split are above 250
-    logger_type: 'tb' # 'wandb', 'tb'
+    logger_type: 'wandb' # 'wandb', 'tb'
 
 train:
   optimizer:
