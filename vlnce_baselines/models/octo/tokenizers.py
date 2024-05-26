@@ -145,9 +145,6 @@ class ImageTokenizer(nn.Module):
                     logging.info(
                         f"No task inputs matching {k} were found. Replacing with zero padding."
                     )
-                    # tasks = flax.core.copy(
-                    #     tasks, {k: torch.zeros_like(observations[k][:, 0])}
-                    # )
                     tasks['k'] = torch.zeros_like(observations[k][:, 0]).to(self.device)
             task_stack_keys = regex_filter(self.task_stack_keys, sorted(tasks.keys()))
             if len(task_stack_keys) == 0:

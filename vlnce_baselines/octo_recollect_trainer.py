@@ -437,21 +437,26 @@ class OctoRecollectTrainer(RecollectTrainer):
                 batch_time = time.time()
                 batch_str = f"{batch_idx + 1}/{batches_per_epoch}"
 
+                # self.print_gpu_memory_usage("Before sampling")
                 observations_batch, action_batch, instructions_batch = next(diter)
+                # self.print_gpu_memory_usage("After sampling")
                 batch, task = self.chunk_and_transform_batch(
                     observations_batch, 
                     action_batch, 
                     instructions_batch, 
                     dataset.obs_transforms
                 )
+                # self.print_gpu_memory_usage("After chuncking")
                 del observations_batch, action_batch, instructions_batch
+                # self.print_gpu_memory_usage("After deleting")
 
+                # gradient accumulation
                 if (
-                    self.config.IL.OCTO_TRAINER.effective_batch_size
+                    self.config.IL.RECOLLECT_TRAINER.effective_batch_size
                     > 0
                 ):
                     loss_accumulation_scalar = (
-                        self.config.IL.OCTO_TRAINER.effective_batch_size
+                        self.config.IL.RECOLLECT_TRAINER.effective_batch_size
                         // self.config.IL.batch_size
                     )
                     step_grad = bool(
@@ -460,16 +465,20 @@ class OctoRecollectTrainer(RecollectTrainer):
                 else:
                     loss_accumulation_scalar = 1
                     step_grad = True
+                
                 action_loss, metrics_dict = self._update_agent(
                     batch,
                     task,
                     step_grad=step_grad,
                     loss_accumulation_scalar=loss_accumulation_scalar,
                 )
+                # self.print_gpu_memory_usage("After update")
+
                 del batch, task
+                # self.print_gpu_memory_usage("After deleting batch")
                 with torch.cuda.device(self.device):
                     torch.cuda.empty_cache()
-
+                # self.print_gpu_memory_usage("After emptying cache")
                 # if self.step_id % 100 == 0:
                 #     torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
 
@@ -532,8 +541,9 @@ class OctoRecollectTrainer(RecollectTrainer):
             pad_mask=batch["observation"]["pad_mask"]
         )
 
+        action_loss = action_loss / loss_accumulation_scalar
         action_loss.backward()
-        # del transformer_embeddings
+
         if step_grad:
             if self.use_grad_clip:
                 torch.nn.utils.clip_grad_norm_(

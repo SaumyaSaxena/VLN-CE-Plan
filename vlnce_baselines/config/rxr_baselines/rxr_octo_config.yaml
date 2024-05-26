@@ -112,7 +112,7 @@ model:
       args: []
       kwargs:
         action_dim: 6 # Will get updated later
-        action_repr: 'one-hot' #'one-hot', 'bits'
+        action_repr: 'bits' #'one-hot', 'bits'
         n_classes: 6 # Will get updated later
         max_action: 5 # Will get updated later
         min_action: -5 # Will get updated later
@@ -120,10 +120,10 @@ model:
         readout_key: readout_action
         use_map: false
         embedding_size: ${model.token_embedding_size}
-        prediction_type: 'action' # 'action', 'noise'
-        loss_type: 'softmax_cross_ent' # 'l1', 'softmax_cross_ent', 'mse'
+        prediction_type: 'noise' # 'action', 'noise'
+        loss_type: 'mse' # 'l1', 'softmax_cross_ent', 'mse'
       module: vlnce_baselines.models.octo.action_heads
-      name: DiscreteActionHead
+      name: DiffusionActionHead # DiffusionActionHead, DiscreteActionHead
   max_horizon: 10
   observation_tokenizers:
     primary:
@@ -160,7 +160,7 @@ model:
     dropout_rate: 0.0
     mlp_dim: 512 # 1536
     num_attention_heads: 3 #6
-    num_layers: 6 #12
+    num_layers: 3 #12
     window_size: ${window_size}
     token_embedding_size: ${model.token_embedding_size}
 

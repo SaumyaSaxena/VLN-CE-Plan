@@ -12,7 +12,7 @@ wandb:
   entity: iam-lab
   group: octo_full
   project: vlnce_plan
-  name: octo_full_instr_discrete_action_head_ResNet
+  name: octo_full_instr_diffusion_action_head_history3_pred4
   saver:
     upload: True
     save_top_k: 5
@@ -75,13 +75,14 @@ RL:
           depth: (256, 256)
 
 IL:
-  batch_size: 2
+  batch_size: 3
   epochs: 15
   inflection_weight_coef: 1.9
   load_from_ckpt: False
   ckpt_to_load: outputs/rxr_octo_en_subtasks/2024_01_12-14_46_50/checkpoints/ckpt.14.pth
 
   OCTO_TRAINER:
+    effective_batch_size: 6
     scale_bits: 1.0 # used when action_repr=bits
     preload_size: 30
     preload_trajectories_file: False
@@ -113,8 +114,8 @@ train:
       sched: cosine
       # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
       epochs: 15  # Total epochs to run (warmup + decay + cooldown)
-      min_lr: 1.0e-5         # k
-      warmup_lr: 1.0e-6
+      min_lr: 1.0e-6         # k
+      warmup_lr: 1.0e-5
       warmup_epochs: 1
       cooldown_epochs: 7
 

@@ -26,6 +26,7 @@ class VlnResnetDepthEncoder(nn.Module):
         spatial_output: bool = False,
     ) -> None:
         super().__init__()
+        self.trainable = trainable
 
         self.visual_encoder = ResNetEncoder(
             spaces.Dict(
@@ -91,7 +92,12 @@ class VlnResnetDepthEncoder(nn.Module):
         if "depth_features" in observations:
             x = observations["depth_features"]
         else:
-            x = self.visual_encoder(observations)
+            if self.trainable:
+                x = self.visual_encoder(observations)
+            else:
+                with torch.no_grad():
+                    x = self.visual_encoder(observations)
+            
 
         if self.spatial_output:
             b, c, h, w = x.size()
@@ -129,6 +135,7 @@ class TorchVisionResNet(nn.Module):
         single_spatial_filter: bool = True,
     ) -> None:
         super().__init__()
+        self.trainable = trainable
         self.normalize_visual_inputs = normalize_visual_inputs
         self.spatial_output = spatial_output
         resnet = getattr(models, resnet_version)(pretrained=True)
@@ -194,7 +201,11 @@ class TorchVisionResNet(nn.Module):
         else:
             # permute tensor to dimension [BATCH x CHANNEL x HEIGHT x WIDTH]
             rgb_observations = observations["rgb"].permute(0, 3, 1, 2)
-            resnet_output = self.cnn(normalize(rgb_observations))
+            if self.trainable:
+                resnet_output = self.cnn(normalize(rgb_observations))
+            else:
+                with torch.no_grad():
+                    resnet_output = self.cnn(normalize(rgb_observations))
 
         if self.spatial_output:
             b, c, h, w = resnet_output.size()

@@ -97,11 +97,12 @@ class RecollectTrainer(BaseVLNCETrainer):
         else:
             print(f'{float(total_trainable_params):.2f}')
     
-    def print_cuda_memory(self, print_loc=' '):
-        print(print_loc)
-        print(f"torch.cuda.memory_allocated: {torch.cuda.memory_allocated(self.device)/1024/1024}MB")
-        print(f"torch.cuda.memory_reserved: {torch.cuda.memory_reserved(self.device)/1024/1024}MB")
-        print(f"torch.cuda.max_memory_reserved: {torch.cuda.max_memory_reserved(self.device)/1024/1024}MB")
+    def print_gpu_memory_usage(self, msg):
+        print(msg)
+        print(f"Memory Allocated: {torch.cuda.memory_allocated() / 1024/1024} MB")
+        print(f"Memory Reserved: {torch.cuda.memory_reserved() / 1024/1024} MB")
+        print(f"Max Memory Allocated: {torch.cuda.max_memory_allocated() / 1024/1024} MB")
+        print(f"Max Memory Reserved: {torch.cuda.max_memory_reserved() / 1024/1024} MB")
 
     def train(self) -> None:
         split = self.config.TASK_CONFIG.DATASET.SPLIT
