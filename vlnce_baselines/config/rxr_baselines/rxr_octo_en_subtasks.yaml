@@ -83,8 +83,7 @@ IL:
 
   OCTO_TRAINER:
     effective_batch_size: 6
-    nbits: 4 # used when action_repr=bits
-    scale_bits: 0.1 # used when action_repr=bits
+    scale_bits: 1.0 # used when action_repr=bits
     preload_size: 30
     preload_trajectories_file: False
     trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories_subtasks_merged.json.gz

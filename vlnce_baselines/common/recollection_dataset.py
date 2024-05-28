@@ -30,9 +30,6 @@ class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
         self.config = config
         self._preload = deque()
 
-        assert (
-            config.IL.RECOLLECT_TRAINER.preload_size >= config.IL.batch_size
-        ), "preload size must be greater than batch size."
         self.envs = None
         self._env_observations = None
 
@@ -54,6 +51,11 @@ class TeacherRecollectionDataset(torch.utils.data.IterableDataset):
         self.initialize_sims()
 
     def initialize_sims(self):
+
+        assert (
+            self.config.IL.RECOLLECT_TRAINER.preload_size >= self.config.IL.batch_size
+        ), "preload size must be greater than batch size."
+
         config = self.config.clone()
         config.defrost()
         config.TASK_CONFIG.MEASUREMENTS = []
@@ -283,6 +285,11 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
         super().__init__(config)
         
     def initialize_sims(self):
+
+        assert (
+            self.config.IL.OCTO_TRAINER.preload_size >= self.config.IL.batch_size
+        ), "preload size must be greater than batch size."
+
         config = self.config.clone()
         config.defrost()
         config.TASK_CONFIG.MEASUREMENTS = []
@@ -345,7 +352,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
             return self._preload.popleft()
 
         while (
-            len(self._preload) < self.config.IL.RECOLLECT_TRAINER.preload_size
+            len(self._preload) < self.config.IL.OCTO_TRAINER.preload_size
         ):
             current_episodes = self.envs.current_episodes()
             prev_eps = current_episodes
@@ -424,8 +431,6 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
 
         obs_t['rxr_instruction'] = obs_t['rxr_instruction'][:,:self.octo_config.bert_max_tokens,:]
         
-        # obs_t = apply_obs_transforms_batch(obs_t, self.obs_transforms)
-
         prev_actions = torch.from_numpy(np.copy(prev_actions))
         oracle_actions = torch.from_numpy(np.copy(oracle_actions))
         one_hot_action = torch.from_numpy(np.copy(one_hot_action)).to(torch.float32)
@@ -445,3 +450,154 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
             self.inflec_weights[inflections],
             instructions,
         )
+    
+class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
+    def __init__(self, config: Config, octo_config):
+        super().__init__(config, octo_config)
+        self.rgb = [[] for _ in range(self.envs.num_envs)]
+        self.depth = [[] for _ in range(self.envs.num_envs)]
+        self.bert_features = [[] for _ in range(self.envs.num_envs)]
+        self.prev_actions = [[] for _ in range(self.envs.num_envs)]
+        self.oracle_actions = [[] for _ in range(self.envs.num_envs)]
+        self.one_hot_action = [[] for _ in range(self.envs.num_envs)]
+        self.instructions = [[] for _ in range(self.envs.num_envs)]
+        for i, ep in enumerate(self.envs.current_episodes()):
+            env_obs = self._env_observations[i][0]
+            self.rgb[i].append(env_obs[0]['rgb'])
+            self.depth[i].append(env_obs[0]['depth'])
+            self.bert_features[i].append(env_obs[0]['rxr_instruction'])
+            self.prev_actions[i].append(env_obs[1])
+            self.oracle_actions[i].append(env_obs[2])
+            self.one_hot_action[i].append(env_obs[3])
+            self.instructions[i].append(env_obs[4])
+        
+        self.length = 0
+        for key, value in self.trajectories.items():
+            self.length += len(value)
+            
+    def add_obsi_to_queue(self, i):
+        traj_len = len(self.rgb[i]) - (self.octo_config.window_size - 1)
+        curr_step = torch.arange(traj_len)
+        obs_offset = torch.arange(self.octo_config.window_size)
+        chunk_indices = curr_step[:, None] + obs_offset[None, :]
+
+        rgb = torch.from_numpy(np.array(self.rgb[i]))[chunk_indices].to(torch.float32)
+        depth = torch.from_numpy(np.array(self.depth[i]))[chunk_indices].to(torch.float32)
+        rxr_instruction = torch.from_numpy(np.array(self.bert_features[i]))[:traj_len,:self.octo_config.bert_max_tokens,:].to(torch.float32)
+
+        action_offset = torch.arange(self.octo_config.window_size + self.octo_config.pred_horizon - 1)
+        chunk_indices = torch.minimum(
+            torch.tensor(len(self.rgb[i])-1),
+            (curr_step[:, None] + action_offset[None, :])
+        ) # repeat last action which should be STOP action
+        prev_actions = torch.from_numpy(np.array(self.prev_actions[i]))[chunk_indices].to(torch.float32)
+        oracle_actions = torch.from_numpy(np.array(self.oracle_actions[i]))[chunk_indices].to(torch.float32)
+        one_hot_action = torch.from_numpy(np.array(self.one_hot_action[i]))[chunk_indices].to(torch.float32)
+        instructions = self.instructions[i][:traj_len]
+
+        self._preload.extend(
+            [
+                (
+                    rgb[t],
+                    depth[t],
+                    rxr_instruction[t],
+                    prev_actions[t],
+                    oracle_actions[t],
+                    one_hot_action[t],
+                    instructions[t]
+                ) for t in range(traj_len)
+            ]
+        )
+        # self._preload.extend(list(zip(
+        #     rgb,
+        #     depth,
+        #     rxr_instruction,
+        #     prev_actions,
+        #     oracle_actions,
+        #     one_hot_action,
+        #     instructions
+        # )))
+        # for t in range(traj_len):
+        #     self._preload.append(
+        #         (
+        #             rgb[t],
+        #             depth[t],
+        #             rxr_instruction[t],
+        #             prev_actions[t],
+        #             oracle_actions[t],
+        #             one_hot_action[t],
+        #             instructions[t]
+        #         )
+        #     )
+
+    def _load_next(self):
+        """
+        Episode length is currently not considered. We were previously batching episodes
+        together with similar lengths. Not sure if we need to bring that back.
+        """
+
+        if len(self._preload):
+            return self._preload.popleft()
+
+        while (
+            len(self._preload) < self.config.IL.OCTO_TRAINER.preload_size
+        ):
+            current_episodes = self.envs.current_episodes()
+            prev_eps = current_episodes
+
+            # get the next action for each env
+            actions = [
+                self.trajectories[ep.episode_id][self.env_step[i]][1]
+                for i, ep in enumerate(current_episodes)
+            ]
+
+            outputs = self.envs.step(actions)
+            observations, _, dones, infos = [list(x) for x in zip(*outputs)]
+            
+            observations = extract_instruction_tokens(
+                observations,
+                self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID,
+            )
+
+            current_episodes = self.envs.current_episodes()
+
+            for i in range(self.envs.num_envs):
+                self.env_step[i] += 1
+                if dones[i]:
+                    assert len(self.prev_actions[i]) == len(
+                        self.trajectories[prev_eps[i].episode_id]
+                    ), "Collected episode does not match the step count of trajectory"
+                    self.add_obsi_to_queue(i)
+
+                    self.rgb[i] = []
+                    self.depth[i] = []
+                    self.bert_features[i] = []
+                    self.prev_actions[i] = []
+                    self.oracle_actions[i] = []
+                    self.one_hot_action[i] = []
+                    self.instructions[i] = []
+                    self.env_step[i] = 0
+
+                path_step = self.trajectories[current_episodes[i].episode_id][
+                    self.env_step[i]
+                ]
+               
+                self.rgb[i].append(observations[i]['rgb'])
+                self.depth[i].append(observations[i]['depth'])
+                self.bert_features[i].append(observations[i]['rxr_instruction'])
+                self.prev_actions[i].append(path_step[0])
+                self.oracle_actions[i].append(path_step[2])
+                self.one_hot_action[i].append(self.actions[current_episodes[i].episode_id][self.env_step[i]])
+                self.instructions[i].append(current_episodes[i].instruction.instruction_text)
+                assert (
+                    len(self.prev_actions[i])
+                    <= self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
+                ), "Trajectories should be no more than the maximum episode steps."
+
+        return self._preload.popleft()
+    
+    def __next__(self):
+        """Takes about 1s to once self._load_next() has finished with a batch
+        size of 5. For this reason, we probably don't need to use extra workers.
+        """
+        return self._load_next()
