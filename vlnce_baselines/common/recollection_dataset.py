@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import tqdm
 import time
+from itertools import islice
 
 from gym import Space
 from habitat.config.default import Config
@@ -477,22 +478,22 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
             
     def add_obsi_to_queue(self, i):
         traj_len = len(self.rgb[i]) - (self.octo_config.window_size - 1)
-        curr_step = torch.arange(traj_len)
-        obs_offset = torch.arange(self.octo_config.window_size)
+        curr_step = np.arange(traj_len)
+        obs_offset = np.arange(self.octo_config.window_size)
         chunk_indices = curr_step[:, None] + obs_offset[None, :]
 
-        rgb = torch.from_numpy(np.array(self.rgb[i]))[chunk_indices].to(torch.float32)
-        depth = torch.from_numpy(np.array(self.depth[i]))[chunk_indices].to(torch.float32)
-        rxr_instruction = torch.from_numpy(np.array(self.bert_features[i]))[:traj_len,:self.octo_config.bert_max_tokens,:].to(torch.float32)
+        rgb = np.array(self.rgb[i])[chunk_indices]
+        depth =np.array(self.depth[i])[chunk_indices]
+        rxr_instruction = np.array(self.bert_features[i])[:traj_len,:self.octo_config.bert_max_tokens,:]
 
-        action_offset = torch.arange(self.octo_config.window_size + self.octo_config.pred_horizon - 1)
-        chunk_indices = torch.minimum(
-            torch.tensor(len(self.rgb[i])-1),
+        action_offset = np.arange(self.octo_config.window_size + self.octo_config.pred_horizon - 1)
+        chunk_indices = np.minimum(
+            len(self.rgb[i])-1,
             (curr_step[:, None] + action_offset[None, :])
         ) # repeat last action which should be STOP action
-        prev_actions = torch.from_numpy(np.array(self.prev_actions[i]))[chunk_indices].to(torch.float32)
-        oracle_actions = torch.from_numpy(np.array(self.oracle_actions[i]))[chunk_indices].to(torch.float32)
-        one_hot_action = torch.from_numpy(np.array(self.one_hot_action[i]))[chunk_indices].to(torch.float32)
+        prev_actions = np.array(self.prev_actions[i])[chunk_indices]
+        oracle_actions = np.array(self.oracle_actions[i])[chunk_indices]
+        one_hot_action = np.array(self.one_hot_action[i])[chunk_indices]
         instructions = self.instructions[i][:traj_len]
 
         self._preload.extend(
@@ -530,15 +531,19 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
         #         )
         #     )
 
+    def _pop_batch(self):
+        # Since num_workers > 0 is not implemented yet, checking if popping larger slices is faster
+        sample_batch = list(islice(self._preload, 0, self.config.IL.batch_size))
+        self._preload = deque(islice(self._preload, self.config.IL.batch_size, None))
+        return sample_batch
+        
     def _load_next(self):
-        """
-        Episode length is currently not considered. We were previously batching episodes
-        together with similar lengths. Not sure if we need to bring that back.
-        """
 
-        if len(self._preload):
-            return self._preload.popleft()
+        if len(self._preload) > self.config.IL.batch_size:
+            return self._pop_batch()
 
+        add_queue_time = 0.
+        preload_time = time.time()
         while (
             len(self._preload) < self.config.IL.OCTO_TRAINER.preload_size
         ):
@@ -567,7 +572,9 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
                     assert len(self.prev_actions[i]) == len(
                         self.trajectories[prev_eps[i].episode_id]
                     ), "Collected episode does not match the step count of trajectory"
+                    start = time.time()
                     self.add_obsi_to_queue(i)
+                    add_queue_time += time.time()-start
 
                     self.rgb[i] = []
                     self.depth[i] = []
@@ -593,11 +600,14 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
                     len(self.prev_actions[i])
                     <= self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
                 ), "Trajectories should be no more than the maximum episode steps."
-
-        return self._preload.popleft()
+        
+        print("Add to queue time: ", add_queue_time)
+        print("Preload time: ", time.time()-preload_time)
+        return self._pop_batch()
     
     def __next__(self):
-        """Takes about 1s to once self._load_next() has finished with a batch
-        size of 5. For this reason, we probably don't need to use extra workers.
-        """
         return self._load_next()
+    
+    @property
+    def batch_size(self):
+        return 1

@@ -7,6 +7,7 @@ TENSORBOARD_DIR: outputs/rxr_octo_en_subtasks
 CHECKPOINT_FOLDER: outputs/rxr_octo_en_subtasks
 CONTEXT_LEARNING: False
 OCTO_CONFIG_PATH: '/home/saumyas/Projects/VLN-CE-Plan/vlnce_baselines/config/rxr_baselines/rxr_octo_config.yaml'
+DATASET: OctoTimeStepsTeacherRecollectionDataset # OctoTimeStepsTeacherRecollectionDataset, OctoTeacherRecollectionDataset
 
 wandb:
   entity: iam-lab

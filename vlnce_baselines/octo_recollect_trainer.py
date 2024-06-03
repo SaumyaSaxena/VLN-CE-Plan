@@ -85,8 +85,7 @@ class TimeStepCollator(object):
         pass
     
     def __call__(self, batch):
-
-        transposed = list(zip(*batch))
+        transposed = list(zip(*batch[0]))
 
         rgb_batch = list(transposed[0])
         depth_batch = list(transposed[1])
@@ -279,16 +278,17 @@ class OctoRecollectTrainer(RecollectTrainer):
             if upload_to_wandb:
                 wandb.save(save_file_name, base_path=os.path.join(ckpt_save_dir, '..'))
 
-    def chunk_and_transform_traj_batch(self, obs_batch, obs_transforms):
+    def chunk_and_transform_batch(self, obs_batch, obs_transforms):
         
         if 'OctoTeacherRecollectionDataset' in self.config.DATASET:
+            non_blocking = True
             observations_batch, action_batch, instructions_batch = obs_batch
             B = len(observations_batch)
             transformed_rgbd_batch = [
                 apply_obs_transforms_batch(
                     {
-                        'rgb': observations_batch[bid]['rgb'].to(device=self.device, non_blocking=True),
-                        'depth': observations_batch[bid]['depth'].to(device=self.device, non_blocking=True),
+                        'rgb': observations_batch[bid]['rgb'].to(device=self.device, non_blocking=non_blocking),
+                        'depth': observations_batch[bid]['depth'].to(device=self.device, non_blocking=non_blocking),
                     },
                     obs_transforms,
                 ) for bid in range(B)
@@ -315,7 +315,7 @@ class OctoRecollectTrainer(RecollectTrainer):
             for sensor in observations_batch:
                 observations_batch[sensor] = torch.cat(
                     observations_batch[sensor], dim=0
-                ).to(device=self.device, non_blocking=True)
+                ).to(device=self.device, non_blocking=non_blocking)
 
             # corrected_actions_batch = torch.cat(corrected_actions_batch, dim=0).flatten()
             actions_with_horizon = []
@@ -328,25 +328,19 @@ class OctoRecollectTrainer(RecollectTrainer):
                     (curr_step[:, None] + obs_offset[None, :])
                 ) # repeat last action which should be STOP action
                 actions_with_horizon.append(action_batch[bid][chunk_indices])
-            actions_with_horizon = torch.cat(actions_with_horizon, dim=0).to(device=self.device, non_blocking=True)
+            actions_with_horizon = torch.cat(actions_with_horizon, dim=0).to(device=self.device, non_blocking=non_blocking)
 
             instructions_batch_flat = []
             for row in instructions_batch:
                 traj_len = len(row) - (self.octo_config.window_size - 1)
                 instructions_batch_flat += row[:traj_len]
         elif 'OctoTimeStepsTeacherRecollectionDataset' in self.config.DATASET:
+            non_blocking = True
             rgb_batch, depth_batch, rxr_instruction_batch, action_batch, instructions_batch_flat = obs_batch
             B = len(rgb_batch)
-            start = time.time()
-            rgb_batch = torch.stack(
-                [b.to(device=self.device, non_blocking=True) for b in rgb_batch], 
-                dim=0)
-            depth_batch = torch.stack(
-                [b.to(device=self.device, non_blocking=True) for b in depth_batch], 
-                dim=0)
+            rgb_batch = torch.from_numpy(np.array(rgb_batch)).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
+            depth_batch = torch.from_numpy(np.array(depth_batch)).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
 
-            print("Stack time:", time.time()-start)
-            start = time.time()
             observations_batch = apply_obs_transforms_batch(
                 {
                     'rgb':  rearrange(rgb_batch, "b l h w c -> (b l) h w c"),
@@ -354,22 +348,11 @@ class OctoRecollectTrainer(RecollectTrainer):
                 },
                 obs_transforms,
             )
-            print("Transform time:", time.time()-start)
-            
-            start = time.time()
             observations_batch['rgb'] = rearrange(observations_batch['rgb'], "(b l) h w c -> b l h w c", b = B, l = self.octo_config.window_size)
             observations_batch['depth'] = rearrange(observations_batch['depth'], "(b l) h w c -> b l h w c", b = B, l = self.octo_config.window_size)
-            print("rearrange time:", time.time()-start)
             
-            start = time.time()
-            observations_batch['rxr_instruction'] = torch.stack(
-                [b.to(device=self.device, non_blocking=True) for b in rxr_instruction_batch], 
-                dim=0)
-            actions_with_horizon = torch.stack(
-                [b.to(device=self.device, non_blocking=True) for b in action_batch], 
-                dim=0)
-            
-            print("Stack2 time:", time.time()-start)
+            observations_batch['rxr_instruction'] = torch.from_numpy(np.array(rxr_instruction_batch)).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
+            actions_with_horizon = torch.from_numpy(np.array(action_batch)).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
         else:
             raise NotImplementedError('Dataset chunker not implemented.')
         
@@ -383,9 +366,9 @@ class OctoRecollectTrainer(RecollectTrainer):
 
         batch_size = observations_batch['rgb'].shape[0]
         # Pad mask for the whole batch with window_size
-        final_obs_batch["observation"]['pad_mask'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool).to(device=self.device, non_blocking=True)
+        final_obs_batch["observation"]['pad_mask'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool).to(device=self.device, non_blocking=non_blocking)
         final_obs_batch["observation"]['pad_mask_dict'] = dict()
-        final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool).to(device=self.device, non_blocking=True)
+        final_obs_batch["observation"]['pad_mask_dict']['image_primary'] = torch.ones((batch_size,self.octo_config.window_size), dtype=bool).to(device=self.device, non_blocking=non_blocking)
 
         final_obs_batch['action'] = actions_with_horizon # add prediction horizon  Shape: (b, pred_horizon=1, action_dim)
 
@@ -393,13 +376,13 @@ class OctoRecollectTrainer(RecollectTrainer):
             task = {"language_instruction": [], "pad_mask_dict": {"language_instruction": []}}
             task["language_instruction"] = self.policy.text_processor.encode(instructions_batch_flat)
             for k, v in task["language_instruction"].items():
-                task["language_instruction"][k] = v.to(device=self.device, non_blocking=True)
+                task["language_instruction"][k] = v.to(device=self.device, non_blocking=non_blocking)
         else:
             task = {"pad_mask_dict": {"language_instruction": []}}
         
         task["pad_mask_dict"]["language_instruction"] = torch.ones(
             len(instructions_batch_flat), dtype=bool
-        ).to(device=self.device, non_blocking=True)
+        ).to(device=self.device, non_blocking=non_blocking)
 
         return final_obs_batch, task
     
@@ -488,7 +471,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 " should be a multiple of batch_size."
             )
 
-        batches_per_epoch = dataset.length // dataset.batch_size
+        batches_per_epoch = dataset.length // self.config.IL.batch_size
 
         for epoch in range(self.start_epoch, self.config.IL.epochs):
             epoch_time = time.time()
@@ -513,15 +496,14 @@ class OctoRecollectTrainer(RecollectTrainer):
                 
                 start = time.time()
                 obs_batch = next(diter)
-                
-                print("batch time", time.time()-start)
+                print("\n batch time", time.time()-start)
 
                 start = time.time()
-                batch, task = self.chunk_and_transform_traj_batch(
+                batch, task = self.chunk_and_transform_batch(
                     obs_batch,
                     dataset.obs_transforms
                 )
-                print("chunk time", time.time()-start)
+                print("\n chunk time", time.time()-start)
                 del obs_batch
 
                 # gradient accumulation
@@ -540,12 +522,15 @@ class OctoRecollectTrainer(RecollectTrainer):
                     loss_accumulation_scalar = 1
                     step_grad = True
                 
+                start = time.time()
                 action_loss, metrics_dict = self._update_agent(
                     batch,
                     task,
                     step_grad=step_grad,
                     loss_accumulation_scalar=loss_accumulation_scalar,
                 )
+                print("Update time: ", time.time()-start)
+                import ipdb; ipdb.set_trace()
                 # self.print_gpu_memory_usage("After update")
                 del batch, task
                 # self.print_gpu_memory_usage("After deleting batch")
@@ -582,7 +567,6 @@ class OctoRecollectTrainer(RecollectTrainer):
 
                 self.step_id += 1  # noqa: SIM113
                 del action_loss, metrics_dict
-                
             
             # Saving/updates at epoch level
             if self.scheduler and self.scheduler_t_in_epochs:

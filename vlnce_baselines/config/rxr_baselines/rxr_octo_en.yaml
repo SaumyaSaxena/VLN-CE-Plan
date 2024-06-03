@@ -76,7 +76,7 @@ RL:
           depth: (256, 256)
 
 IL:
-  batch_size: 600
+  batch_size: 117
   epochs: 15
   inflection_weight_coef: 1.9
   load_from_ckpt: False
@@ -85,7 +85,7 @@ IL:
   OCTO_TRAINER:
     effective_batch_size: -1 # should be a multiple of batch_size
     scale_bits: 1.0 # used when action_repr=bits
-    preload_size: 4800 # should be greater than batch_size
+    preload_size: 234 # should be greater than batch_size
     preload_trajectories_file: False
     trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories.json.gz
     max_traj_len: 250  # 1.3% of episodes in the English training split are above 250
