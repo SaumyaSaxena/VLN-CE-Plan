@@ -38,10 +38,27 @@ if __name__== "__main__":
     scheduler_config.sched = 'cosine' 
     scheduler_config.min_lr = 1.0e-5
     scheduler_config.warmup_lr = 1.0e-6
-    scheduler_config.warmup_epochs = 2
+    scheduler_config.warmup_epochs = 1
 
     scheduler, num_epochs = create_scheduler(scheduler_config, optimizer)
 
+    sch_lr = []
+    optim_lr = []
+    for e in range(20):
+        for s in range(num_epochs):
+            sch_lr.append(scheduler.get_epoch_values(s)[0])
+            optim_lr.append(optimizer.param_groups[0]['lr'])
+            scheduler.step(s)
+        scheduler.step(s)
+
+    plt.plot([i for i in range(len(sch_lr))], sch_lr, label="Without warmup", alpha=0.8)
+    plt.savefig(f"/home/saumyas/Projects/VLN-CE-Plan/tests/media/Scheduler_lr.jpg")
+    plt.close()
+
+    plt.plot([i for i in range(len(optim_lr))], optim_lr, label="Without warmup", alpha=0.8)
+    plt.savefig(f"/home/saumyas/Projects/VLN-CE-Plan/tests/media/Optim_lr.jpg")
+    plt.close()
+    
     lr_per_epoch = get_lr_per_epoch(scheduler, num_epochs)
     plt.plot([i for i in range(num_epochs)], lr_per_epoch, label="Without warmup", alpha=0.8)
     plt.savefig(f"/home/saumyas/Projects/VLN-CE-Plan/tests/media/timm_Scheduler.jpg")

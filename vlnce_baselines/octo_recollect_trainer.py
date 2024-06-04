@@ -126,12 +126,15 @@ class OctoRecollectTrainer(RecollectTrainer):
         if self.config.EVAL.SAVE_RESULTS:
             self._make_results_dir()
 
-    def get_current_learning_rate(self, epoch):
+    def get_current_learning_rate(self, epoch, batch_idx):
         '''Get current learning rate for logging.'''
         lr = None
         if self.scheduler:
             if self.scheduler_is_timm:
-                lr = self.scheduler.get_epoch_values(epoch)[0]
+                if self.scheduler_t_in_epochs:
+                    lr = self.scheduler.get_epoch_values(epoch)[0]
+                else:
+                    lr = self.scheduler.get_epoch_values(batch_idx)[0]
             else:
                 lr = self.scheduler.get_last_lr()[0]
         else:
@@ -225,20 +228,7 @@ class OctoRecollectTrainer(RecollectTrainer):
         self.policy.to(self.device)
         
         self.print_parameters(self.policy)
-        self.optimizer = create_optimizer_with_params(config.train.optimizer, self.policy.get_trainable_parameters())
-
-        # Create scheduler
-        if config.train.scheduler.use:
-            self.scheduler, scheduler_extra_dict = create_schedulder_with_params(config.train.scheduler, self.optimizer)
-            # If True update scheduler at epochs else after every step
-            self.scheduler_t_in_epochs = scheduler_extra_dict['t_in_epochs']
-            self.scheduler_is_timm = scheduler_extra_dict['timm_scheduler']
-        else:
-            self.scheduler = None
-
-        self.use_grad_clip = config.train.grad_clip.use
-        if self.use_grad_clip:
-            self.grad_clip_norm = config.train.grad_clip.norm
+        
 
         if load_from_ckpt:
             self.policy.load_state_dict(ckpt["state_dict"])
@@ -473,6 +463,21 @@ class OctoRecollectTrainer(RecollectTrainer):
 
         batches_per_epoch = dataset.length // self.config.IL.batch_size
 
+        self.optimizer = create_optimizer_with_params(self.config.train.optimizer, self.policy.get_trainable_parameters())
+
+        # Create scheduler
+        if self.config.train.scheduler.use:
+            self.scheduler, scheduler_extra_dict = create_schedulder_with_params(self.config.train.scheduler, self.optimizer, batches_per_epoch)
+            # If True update scheduler at epochs else after every step
+            self.scheduler_t_in_epochs = scheduler_extra_dict['t_in_epochs']
+            self.scheduler_is_timm = scheduler_extra_dict['timm_scheduler']
+        else:
+            self.scheduler = None
+
+        self.use_grad_clip = self.config.train.grad_clip.use
+        if self.use_grad_clip:
+            self.grad_clip_norm = self.config.train.grad_clip.norm
+
         for epoch in range(self.start_epoch, self.config.IL.epochs):
             epoch_time = time.time()
             epoch_str = f"{epoch + 1}/{self.config.IL.epochs}"
@@ -494,16 +499,16 @@ class OctoRecollectTrainer(RecollectTrainer):
                 batch_time = time.time()
                 batch_str = f"{batch_idx + 1}/{batches_per_epoch}"
                 
-                start = time.time()
+                # start = time.time()
                 obs_batch = next(diter)
-                print("\n batch time", time.time()-start)
+                # print("\n batch time", time.time()-start)
 
-                start = time.time()
+                # start = time.time()
                 batch, task = self.chunk_and_transform_batch(
                     obs_batch,
                     dataset.obs_transforms
                 )
-                print("\n chunk time", time.time()-start)
+                # print("\n chunk time", time.time()-start)
                 del obs_batch
 
                 # gradient accumulation
@@ -526,11 +531,11 @@ class OctoRecollectTrainer(RecollectTrainer):
                 action_loss, metrics_dict = self._update_agent(
                     batch,
                     task,
+                    batch_idx,
                     step_grad=step_grad,
                     loss_accumulation_scalar=loss_accumulation_scalar,
                 )
                 print("Update time: ", time.time()-start)
-                import ipdb; ipdb.set_trace()
                 # self.print_gpu_memory_usage("After update")
                 del batch, task
                 # self.print_gpu_memory_usage("After deleting batch")
@@ -552,7 +557,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 
                 if 'wandb' in self.config.IL.OCTO_TRAINER.logger_type:
                     optim_logs = {'epoch': epoch}
-                    optim_logs['optim/lr'] = self.get_current_learning_rate(epoch)
+                    optim_logs['optim/lr'] = self.get_current_learning_rate(epoch, batch_idx)
 
                     log_dict = {'train_loss': action_loss}
                     log_dict.update(metrics_dict)
@@ -583,6 +588,7 @@ class OctoRecollectTrainer(RecollectTrainer):
     def _update_agent(self, 
         batch,
         task,
+        batch_idx: int = 0,
         step_grad: bool = True,
         loss_accumulation_scalar: int = 1,
     ):
@@ -608,7 +614,7 @@ class OctoRecollectTrainer(RecollectTrainer):
             self.optimizer.step()
 
             if self.scheduler and not self.scheduler_t_in_epochs:
-                self.scheduler.step()
+                self.scheduler.step(batch_idx)
 
             self.optimizer.zero_grad()
 

@@ -1,7 +1,7 @@
 BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_subtasks.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
-TORCH_GPU_ID: 0
+TORCH_GPU_ID: 2
 NUM_ENVIRONMENTS: 5 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en_subtasks
 CHECKPOINT_FOLDER: outputs/rxr_octo_en_subtasks
@@ -13,7 +13,7 @@ wandb:
   entity: iam-lab
   group: octo_subtasks
   project: vlnce_plan
-  name: octo_subtasks_diffusion_action_head_history3_pred4
+  name: test
   saver:
     upload: True
     save_top_k: 5
@@ -76,16 +76,16 @@ RL:
           depth: (256, 256)
 
 IL:
-  batch_size: 3
+  batch_size: 300
   epochs: 15
   inflection_weight_coef: 1.9
   load_from_ckpt: False
   ckpt_to_load: outputs/rxr_octo_en_subtasks/2024_01_12-14_46_50/checkpoints/ckpt.14.pth
 
   OCTO_TRAINER:
-    effective_batch_size: 6
+    effective_batch_size: -1
     scale_bits: 1.0 # used when action_repr=bits
-    preload_size: 30
+    preload_size: 4800
     preload_trajectories_file: False
     trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories_subtasks_merged.json.gz
     max_traj_len: 250  # 1.3% of episodes in the English training split are above 250
@@ -106,6 +106,9 @@ train:
   scheduler:
     use: True
     name: timm_cosine
+    update_per: step # epoch
+    cooldown_ratio: 0.1
+    warmup_ratio: 0.2
     CosineAnnealingLR:
       eta_min: 0.00001
       t_max: -1

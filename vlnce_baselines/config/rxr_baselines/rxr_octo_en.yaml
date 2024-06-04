@@ -106,6 +106,9 @@ train:
   scheduler:
     use: True
     name: timm_cosine
+    update_per: step # epoch
+    cooldown_ratio: 0.1
+    warmup_ratio: 0.2
     CosineAnnealingLR:
       eta_min: 0.00001
       t_max: -1

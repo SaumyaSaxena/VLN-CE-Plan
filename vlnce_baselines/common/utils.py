@@ -139,7 +139,7 @@ def create_optimizer_with_params(config, params):
         raise ValueError(f"Invalid optimizer: {config['name']}")
     return optimizer
 
-def create_schedulder_with_params(config: Mapping[str, Any], optimizer) -> Tuple[Optional[Any], Mapping]:
+def create_schedulder_with_params(config: Mapping[str, Any], optimizer, batches) -> Tuple[Optional[Any], Mapping]:
     scheduler = None
     extra_dict = {}
 
@@ -147,18 +147,27 @@ def create_schedulder_with_params(config: Mapping[str, Any], optimizer) -> Tuple
     scheduler_config = config[config['name']]
     if scheduler_config['use_timm']: 
         # Use timm scheduler
-        total_epochs = scheduler_config['epochs']
-        # Manually set the epochs correctly
-        cooldown_epochs = scheduler_config.get('cooldown_epochs', 0)
-        scheduler_config['epochs'] = total_epochs - cooldown_epochs
+        
+        if 'epoch' in config['update_per']:
+            # Manually set the epochs correctly
+            total_epochs = scheduler_config['epochs']
+            cooldown_epochs = scheduler_config.get('cooldown_epochs', 0)
+            scheduler_config['epochs'] = total_epochs - cooldown_epochs
+            extra_dict['t_in_epochs'] = True
+        else: # update lr per step and cycle
+            total_epochs = batches
+            cooldown_steps = int(batches*config['cooldown_ratio'])
+            scheduler_config['epochs'] = batches - cooldown_steps
+            scheduler_config['warmup_epochs'] = int(batches*config['warmup_ratio'])
+            scheduler_config['cooldown_epochs'] = cooldown_steps
+            extra_dict['t_in_epochs'] = False
+
         scheduler, num_epochs = create_scheduler(scheduler_config, optimizer)
 
         assert num_epochs == total_epochs, (
             f"timm scheduler epochs {num_epochs} and total epochs {total_epochs} do not match.")
 
         extra_dict['num_epochs'] = num_epochs
-        # Update scheduler in epochs
-        extra_dict['t_in_epochs'] = True
         extra_dict['timm_scheduler'] = True
 
     elif config['name'] == 'CosineAnnealingLR':

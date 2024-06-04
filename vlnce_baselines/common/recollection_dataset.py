@@ -542,8 +542,8 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
         if len(self._preload) > self.config.IL.batch_size:
             return self._pop_batch()
 
-        add_queue_time = 0.
-        preload_time = time.time()
+        # add_queue_time = 0.
+        # preload_time = time.time()
         while (
             len(self._preload) < self.config.IL.OCTO_TRAINER.preload_size
         ):
@@ -572,9 +572,9 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
                     assert len(self.prev_actions[i]) == len(
                         self.trajectories[prev_eps[i].episode_id]
                     ), "Collected episode does not match the step count of trajectory"
-                    start = time.time()
+                    # start = time.time()
                     self.add_obsi_to_queue(i)
-                    add_queue_time += time.time()-start
+                    # add_queue_time += time.time()-start
 
                     self.rgb[i] = []
                     self.depth[i] = []
@@ -601,8 +601,8 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
                     <= self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
                 ), "Trajectories should be no more than the maximum episode steps."
         
-        print("Add to queue time: ", add_queue_time)
-        print("Preload time: ", time.time()-preload_time)
+        # print("Add to queue time: ", add_queue_time)
+        # print("Preload time: ", time.time()-preload_time)
         return self._pop_batch()
     
     def __next__(self):
