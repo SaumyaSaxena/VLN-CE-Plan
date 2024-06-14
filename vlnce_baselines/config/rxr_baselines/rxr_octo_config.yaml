@@ -11,9 +11,9 @@ save_dir: null
 save_interval: 10000
 start_step: null
 
-window_size: 3
+window_size: 1
 num_inp_channels: 4 # RGBD input
-pred_horizon: 4
+pred_horizon: 1
 
 viz_interval: 20000
 viz_kwargs:
@@ -112,7 +112,7 @@ model:
       args: []
       kwargs:
         action_dim: 6 # Will get updated later
-        action_repr: 'bits' #'one-hot', 'bits'
+        action_repr: 'one-hot' #'one-hot', 'bits'
         n_classes: 6 # Will get updated later
         max_action: 5 # Will get updated later
         min_action: -5 # Will get updated later
@@ -120,10 +120,10 @@ model:
         readout_key: readout_action
         use_map: false
         embedding_size: ${model.token_embedding_size}
-        prediction_type: 'noise' # 'action', 'noise'
-        loss_type: 'mse' # 'l1', 'softmax_cross_ent', 'mse'
+        prediction_type: 'action' # 'action', 'noise'
+        loss_type: 'softmax_cross_ent' # 'l1', 'softmax_cross_ent', 'mse'
       module: vlnce_baselines.models.octo.action_heads
-      name: DiffusionActionHead # DiffusionActionHead, DiscreteActionHead
+      name: DiscreteActionHead # DiffusionActionHead, DiscreteActionHead
   max_horizon: 10
   observation_tokenizers:
     primary:
@@ -208,8 +208,8 @@ image_encoder_kwargs:
         output_size: 128
         backbone: "resnet50"
         ddppo_checkpoint: "data/ddppo-models/gibson-2plus-resnet50.pth"
-        trainable: False
+        trainable: True
       RGB_ENCODER:
         cnn_type: "TorchVisionResNet50"
         output_size: 256
-        trainable: False
+        trainable: True

@@ -42,6 +42,7 @@ from vlnce_baselines.common.utils import (
     create_optimizer_with_params, 
     create_schedulder_with_params, 
     extract_instruction_tokens,
+    stack_tensors_jit,
 )
 from vlnce_baselines.common.utils import TopKLogger
 
@@ -85,7 +86,9 @@ class TimeStepCollator(object):
         pass
     
     def __call__(self, batch):
-        transposed = list(zip(*batch[0]))
+        # start = time.time()
+        # transposed = list(zip(*batch[0]))
+        transposed = list(zip(*batch))
 
         rgb_batch = list(transposed[0])
         depth_batch = list(transposed[1])
@@ -94,7 +97,7 @@ class TimeStepCollator(object):
         # oracle_actions = list(transposed[4])
         actions_for_training = list(transposed[5])
         instructions_batch = list(transposed[6])
-        
+        # print("collate time:", time.time()-start)
         return (
             rgb_batch,
             depth_batch,
@@ -114,7 +117,7 @@ class OctoRecollectTrainer(RecollectTrainer):
 
     def __init__(self, config=None):
         super().__init__(config)
-
+    
     def _make_dirs(self) -> None:
         self._make_ckpt_dir()
         os.makedirs(
@@ -328,9 +331,26 @@ class OctoRecollectTrainer(RecollectTrainer):
             non_blocking = True
             rgb_batch, depth_batch, rxr_instruction_batch, action_batch, instructions_batch_flat = obs_batch
             B = len(rgb_batch)
-            rgb_batch = torch.from_numpy(np.array(rgb_batch)).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
-            depth_batch = torch.from_numpy(np.array(depth_batch)).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
 
+            ## Stacking if returned vector was numpy
+            # start = time.time()
+            # rgb_batch = torch.from_numpy(
+            #     np.array(rgb_batch)
+            # ).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
+            # depth_batch = torch.from_numpy(
+            #     np.array(depth_batch)
+            # ).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
+            # print("Stack1 time:", time.time()-start)
+
+
+            ## Stacking if returned vector was torch
+            # start = time.time()
+            rgb_batch = torch.stack(rgb_batch, dim=0).to(device=self.device, non_blocking=non_blocking)
+            depth_batch = torch.stack(depth_batch, dim=0).to(device=self.device, non_blocking=non_blocking)
+            # print("Stack1 time:", time.time()-start)
+
+
+            # start = time.time()
             observations_batch = apply_obs_transforms_batch(
                 {
                     'rgb':  rearrange(rgb_batch, "b l h w c -> (b l) h w c"),
@@ -340,9 +360,25 @@ class OctoRecollectTrainer(RecollectTrainer):
             )
             observations_batch['rgb'] = rearrange(observations_batch['rgb'], "(b l) h w c -> b l h w c", b = B, l = self.octo_config.window_size)
             observations_batch['depth'] = rearrange(observations_batch['depth'], "(b l) h w c -> b l h w c", b = B, l = self.octo_config.window_size)
-            
-            observations_batch['rxr_instruction'] = torch.from_numpy(np.array(rxr_instruction_batch)).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
-            actions_with_horizon = torch.from_numpy(np.array(action_batch)).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
+            # print("Transform and rearrange time:", time.time()-start)
+
+
+            ## Stacking if returned vector was numpy
+            # start = time.time()
+            # observations_batch['rxr_instruction'] = torch.from_numpy(
+            #     np.array(rxr_instruction_batch)
+            # ).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
+            # actions_with_horizon = torch.from_numpy(
+            #     np.array(action_batch)
+            # ).to(device=self.device, non_blocking=non_blocking).to(torch.float32)
+            # print("Stack2 time:", time.time()-start)
+
+
+            ## Stacking if returned vector was torch
+            # start = time.time()
+            observations_batch['rxr_instruction'] = torch.stack(rxr_instruction_batch, dim=0).to(device=self.device, non_blocking=non_blocking)
+            actions_with_horizon = torch.stack(action_batch, dim=0).to(device=self.device, non_blocking=non_blocking)
+            # print("Stack2 time:", time.time()-start)
         else:
             raise NotImplementedError('Dataset chunker not implemented.')
         
@@ -445,7 +481,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 batch_size=dataset.batch_size,
                 shuffle=False,
                 collate_fn=collate_fn,
-                pin_memory=False,
+                pin_memory=True,
                 drop_last=True,
                 num_workers=1,
             )
@@ -509,7 +545,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                     dataset.obs_transforms
                 )
                 # print("\n chunk time", time.time()-start)
-                del obs_batch
+                # del obs_batch
 
                 # gradient accumulation
                 if (
@@ -527,7 +563,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                     loss_accumulation_scalar = 1
                     step_grad = True
                 
-                start = time.time()
+                # start = time.time()
                 action_loss, metrics_dict = self._update_agent(
                     batch,
                     task,
@@ -535,7 +571,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                     step_grad=step_grad,
                     loss_accumulation_scalar=loss_accumulation_scalar,
                 )
-                print("Update time: ", time.time()-start)
+                # print("Update time: ", time.time()-start)
                 # self.print_gpu_memory_usage("After update")
                 del batch, task
                 # self.print_gpu_memory_usage("After deleting batch")
@@ -859,7 +895,7 @@ class OctoRecollectTrainer(RecollectTrainer):
                 )
             outputs = envs.step([a[0].item() for a in actions])
             observations, _, dones, infos = [list(x) for x in zip(*outputs)]
-            log_keys = [k for k in infos[0].keys() if 'agent' not in k]
+            log_keys = [k for k in infos[0].keys() if ('agent' not in k) and ('top_down_map_vlnce' not in k)]
             # reset envs and observations if necessary
             for i in range(envs.num_envs):
                 if config.EVAL.SAVE_VIDEO:

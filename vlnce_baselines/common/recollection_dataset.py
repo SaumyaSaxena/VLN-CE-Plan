@@ -299,7 +299,7 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
         self.envs = construct_envs(
             config,
             get_env_class(config.ENV_NAME),
-            episodes_allowed=list(self.trajectories.keys()),
+            episodes_allowed=list(self.trajectories.keys())[:54312],
         )
         self.length = sum(self.envs.number_of_episodes)
         self.obs_transforms = get_active_obs_transforms(self.config)
@@ -531,10 +531,66 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
         #         )
         #     )
 
+    def add_obsi_to_queue_torch(self, i):
+        traj_len = len(self.rgb[i]) - (self.octo_config.window_size - 1)
+        curr_step = torch.arange(traj_len)
+        obs_offset = torch.arange(self.octo_config.window_size)
+        chunk_indices = curr_step[:, None] + obs_offset[None, :]
+
+        rgb = torch.from_numpy(np.array(self.rgb[i]))[chunk_indices].to(torch.float32)
+        depth = torch.from_numpy(np.array(self.depth[i]))[chunk_indices].to(torch.float32)
+        rxr_instruction = torch.from_numpy(np.array(self.bert_features[i])[:traj_len,:self.octo_config.bert_max_tokens,:]).to(torch.float32)
+
+        action_offset = torch.arange(self.octo_config.window_size + self.octo_config.pred_horizon - 1)
+        chunk_indices = torch.minimum(
+            torch.tensor(len(self.rgb[i])-1),
+            (curr_step[:, None] + action_offset[None, :])
+        ) # repeat last action which should be STOP action
+        prev_actions = torch.from_numpy(np.array(self.prev_actions[i]))[chunk_indices].to(torch.float32)
+        oracle_actions = torch.from_numpy(np.array(self.oracle_actions[i]))[chunk_indices].to(torch.float32)
+        one_hot_action = torch.from_numpy(np.array(self.one_hot_action[i]))[chunk_indices].to(torch.float32)
+        instructions = self.instructions[i][:traj_len]
+
+        self._preload.extend(
+            [
+                (
+                    rgb[t],
+                    depth[t],
+                    rxr_instruction[t],
+                    prev_actions[t],
+                    oracle_actions[t],
+                    one_hot_action[t],
+                    instructions[t]
+                ) for t in range(traj_len)
+            ]
+        )
+        # self._preload.extend(list(zip(
+        #     rgb,
+        #     depth,
+        #     rxr_instruction,
+        #     prev_actions,
+        #     oracle_actions,
+        #     one_hot_action,
+        #     instructions
+        # )))
+        # for t in range(traj_len):
+        #     self._preload.append(
+        #         (
+        #             rgb[t],
+        #             depth[t],
+        #             rxr_instruction[t],
+        #             prev_actions[t],
+        #             oracle_actions[t],
+        #             one_hot_action[t],
+        #             instructions[t]
+        #         )
+        #     )
+
     def _pop_batch(self):
         # Since num_workers > 0 is not implemented yet, checking if popping larger slices is faster
-        sample_batch = list(islice(self._preload, 0, self.config.IL.batch_size))
-        self._preload = deque(islice(self._preload, self.config.IL.batch_size, None))
+        # sample_batch = list(islice(self._preload, 0, self.config.IL.batch_size))
+        # self._preload = deque(islice(self._preload, self.config.IL.batch_size, None))
+        sample_batch = self._preload.popleft()
         return sample_batch
         
     def _load_next(self):
@@ -573,7 +629,7 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
                         self.trajectories[prev_eps[i].episode_id]
                     ), "Collected episode does not match the step count of trajectory"
                     # start = time.time()
-                    self.add_obsi_to_queue(i)
+                    self.add_obsi_to_queue_torch(i)
                     # add_queue_time += time.time()-start
 
                     self.rgb[i] = []
@@ -608,6 +664,6 @@ class OctoTimeStepsTeacherRecollectionDataset(OctoTeacherRecollectionDataset):
     def __next__(self):
         return self._load_next()
     
-    @property
-    def batch_size(self):
-        return 1
+    # @property
+    # def batch_size(self):
+    #     return 1

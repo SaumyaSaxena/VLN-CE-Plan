@@ -89,10 +89,10 @@ def plot_env_obs(agent_state, world_time, actions, instruction_id, episode_id, g
 
 if __name__== "__main__":
     save_video = True
-    subtasks = False
+    subtasks = True
     save_dataset = False
 
-    data_type = 'val_unseen'
+    data_type = 'train'
     role = 'guide'
 
     if save_dataset:
@@ -183,13 +183,18 @@ if __name__== "__main__":
 
                 if save_video:
                     print("Saving episode id", current_episodes[i].episode_id)
+                    if subtasks:
+                        metrics={"spl": infos[i]["spl_rxr"],
+                            "orig_ep_idx": current_episodes[i].original_episode_idx}
+                    else:
+                        metrics={"spl": infos[i]["spl_rxr"]}
                     generate_video(
                         video_option=['disk'],
                         video_dir=video_dir,
                         images=rgb_frames[i],
                         episode_id=current_episodes[i].episode_id,
                         checkpoint_idx=0,
-                        metrics={"spl": infos[i]["spl_rxr"]},
+                        metrics=metrics,
                         tb_writer=None,
                     )
 

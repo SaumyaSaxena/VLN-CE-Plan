@@ -1,8 +1,8 @@
 BASE_TASK_CONFIG_PATH: habitat_extensions/config/rxr_vlnce_english_subtasks.yaml
 TRAINER_NAME: octo_trainer
 SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
-TORCH_GPU_ID: 2
-NUM_ENVIRONMENTS: 5 # Number of envs per GPU
+TORCH_GPU_ID: 0
+NUM_ENVIRONMENTS: 10 # Number of envs per GPU
 TENSORBOARD_DIR: outputs/rxr_octo_en_subtasks
 CHECKPOINT_FOLDER: outputs/rxr_octo_en_subtasks
 CONTEXT_LEARNING: False
@@ -13,7 +13,7 @@ wandb:
   entity: iam-lab
   group: octo_subtasks
   project: vlnce_plan
-  name: test
+  name: subtasks_discreteAH_wind1_horizon1_half_data_finetune_vision
   saver:
     upload: True
     save_top_k: 5
@@ -31,12 +31,12 @@ EVAL:
   SAVE_RESULTS: False
   logger_type: 'wandb' # 'wandb', 'tb'
   wandb_load:
-    run_path: 'iam-lab/vlnce_plan/wbjwe454'
-    file: checkpoints/ckpt_epoch_0_step_12060_action_loss_3.535.pth
+    run_path: 'iam-lab/vlnce_plan/041jcv8g'
+    file: checkpoints/ckpt_epoch_2_step_56868_action_loss_5.276.pth
     entity: iam-lab
     project: vlnce_plan_eval
     group: octo
-    name: subtasks_diffusion_action_head_SuccDist_1
+    name: subtasks_discreteAH_wind_horizon4_SD1 #subtasks_discreteAH_step_sched_wind3_horizon4_SD2
   tb_load:
     EVAL_CKPT_PATH_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57/checkpoints/ckpt.14.pth # If this is a directory, evaluate all checkpoints. Else evaluate the specified checkpoint.pth
     EVAL_LOG_DIR: outputs/rxr_octo_en_subtasks/2024_01_16-15_35_57
@@ -55,9 +55,9 @@ EVAL:
     ENVIRONMENT:
       MAX_EPISODE_STEPS: 300
   COMMON:
-    SIMULATOR_GPU_IDS: [1] # Evals run on these GPUs
+    SIMULATOR_GPU_IDS: [2] # Evals run on these GPUs
     NUM_ENVIRONMENTS: 10 # Number of envs per GPU
-    TORCH_GPU_ID: 2
+    TORCH_GPU_ID: 0
 
 MODEL:
   policy_name: OctoPolicy
@@ -76,7 +76,7 @@ RL:
           depth: (256, 256)
 
 IL:
-  batch_size: 300
+  batch_size: 150
   epochs: 15
   inflection_weight_coef: 1.9
   load_from_ckpt: False
@@ -85,7 +85,7 @@ IL:
   OCTO_TRAINER:
     effective_batch_size: -1
     scale_bits: 1.0 # used when action_repr=bits
-    preload_size: 4800
+    preload_size: 9600
     preload_trajectories_file: False
     trajectories_file: data/trajectories_dirs/rxr_en_guide_trim250/trajectories_subtasks_merged.json.gz
     max_traj_len: 250  # 1.3% of episodes in the English training split are above 250
@@ -106,7 +106,7 @@ train:
   scheduler:
     use: True
     name: timm_cosine
-    update_per: step # epoch
+    update_per: epoch # epoch
     cooldown_ratio: 0.1
     warmup_ratio: 0.2
     CosineAnnealingLR:

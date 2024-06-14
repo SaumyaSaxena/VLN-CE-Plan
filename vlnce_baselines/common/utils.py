@@ -5,6 +5,7 @@ from gym import spaces
 import numpy as np
 
 import torch
+from torch import Tensor
 import tensorflow as tf
 import tensorflow_hub as hub
 
@@ -206,6 +207,12 @@ def bits2int(x, out_dtype=torch.int32):
         x = np.packbits(x, axis=-1, bitorder='little')
     return x
 
+@torch.jit.script
+def stack_tensors_jit(inp: List[Tensor], sh: Tuple[int, int, int, int], dim: int=0):
+    out = torch.zeros(*sh)
+    for i in range(len(inp)):
+        out[i].copy(inp[i])
+    return out
 
 class TopKLogger:
     def __init__(self, k: int):
@@ -225,7 +232,7 @@ class TopKLogger:
                 return True
             else:
                 return False
-            
+
 if __name__ == "__main__":
     # aa = torch.tensor([0, 1, 2, 3, 4, 5])
     aa = np.array([0, 1, 2, 3, 4, 5])
