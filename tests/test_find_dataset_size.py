@@ -40,6 +40,13 @@ if __name__== "__main__":
     gt_data_subtasks = load_gt_data(data_type=data_type, role=role, subtasks=True)
 
     fwd_steps = [v['forward_steps'] for v in gt_data_subtasks.values()]
+    ep_idx_scene_id = [data_subtasks['episodes'][i]['episode_id'] for i in range(dataset_size_subtasks) if data_subtasks['episodes'][0]['scene_id'] in data_subtasks['episodes'][i]['scene_id']]
+
+    traj_len = np.zeros((dataset_size_subtasks))
+    for i, k in enumerate(gt_data_subtasks.keys()):
+        traj_len[i] = len(gt_data_subtasks[k]['actions'])
+
+    import ipdb; ipdb.set_trace()
 
     # Create a histogram with customizations
 

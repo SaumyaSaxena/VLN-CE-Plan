@@ -284,7 +284,66 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
         self.octo_config = octo_config
         self.action_repr = octo_config.model.heads.action.kwargs.action_repr
         super().__init__(config)
-        
+
+    def collect_dataset(self):
+        """Uses the ground truth trajectories to create a teacher forcing
+        datset for a given split. Loads both guide and follower episodes.
+        """
+        trajectories = defaultdict(list)
+        split = self.config.TASK_CONFIG.DATASET.SPLIT
+
+        if "{role}" in self.config.IL.OCTO_TRAINER.gt_file:
+            gt_data = {}
+            for role in RxRVLNCEDatasetV1.annotation_roles:
+                if (
+                    ALL_ROLES_MASK not in self.config.TASK_CONFIG.DATASET.ROLES
+                    and role not in self.config.TASK_CONFIG.DATASET.ROLES
+                ):
+                    continue
+
+                with gzip.open(
+                    self.config.IL.OCTO_TRAINER.gt_file.format(
+                        split=split, role=role
+                    ),
+                    "rt",
+                ) as f:
+                    gt_data.update(json.load(f))
+        else:
+            with gzip.open(
+                self.config.IL.OCTO_TRAINER.gt_path.format(split=split)
+            ) as f:
+                gt_data = json.load(f)
+
+        t = (
+            tqdm.tqdm(gt_data.items(), "GT Collection")
+            if self.config.use_pbar
+            else gt_data.items()
+        )
+
+        for episode_id, trajectory in t:
+            if (
+                self.config.IL.OCTO_TRAINER.max_traj_len != -1
+                and len(trajectory["actions"])
+                > self.config.IL.OCTO_TRAINER.max_traj_len
+            ):
+                continue
+
+            for i, action in enumerate(trajectory["actions"]):
+                prev_action = (
+                    trajectories[episode_id][i - 1][1]
+                    if i
+                    else HabitatSimActions.STOP
+                )
+
+                # [prev_action, action, oracle_action]
+                trajectories[episode_id].append([prev_action, action, action])
+
+        with gzip.open(
+            self.config.IL.OCTO_TRAINER.trajectories_file, "wt"
+        ) as f:
+            f.write(json.dumps(trajectories))
+        return trajectories
+    
     def initialize_sims(self):
 
         assert (
@@ -296,11 +355,34 @@ class OctoTeacherRecollectionDataset(TeacherRecollectionDataset):
         config.TASK_CONFIG.MEASUREMENTS = []
         config.freeze()
 
+        # temporary
+        # split = self.config.TASK_CONFIG.DATASET.SPLIT
+        # if "{role}" in self.config.TASK_CONFIG.DATASET.DATA_PATH:
+        #     data = {}
+        #     for role in RxRVLNCEDatasetV1.annotation_roles:
+        #         if (
+        #             ALL_ROLES_MASK not in self.config.TASK_CONFIG.DATASET.ROLES
+        #             and role not in self.config.TASK_CONFIG.DATASET.ROLES
+        #         ):
+        #             continue
+
+        #         with gzip.open(
+        #             self.config.TASK_CONFIG.DATASET.DATA_PATH.format(
+        #                 split=split, role=role
+        #             ),
+        #             "rt",
+        #         ) as f:
+        #             data.update(json.load(f))
+        # dataset_size = len(data['episodes'])
+        # episodes_allowed = [data['episodes'][i]['episode_id'] for i in range(dataset_size) if data['episodes'][0]['scene_id'] in data['episodes'][i]['scene_id']]
+        
+        episodes_allowed = list(self.trajectories.keys())[:54312]
         self.envs = construct_envs(
             config,
             get_env_class(config.ENV_NAME),
-            episodes_allowed=list(self.trajectories.keys())[:54312],
+            episodes_allowed=episodes_allowed,
         )
+
         self.length = sum(self.envs.number_of_episodes)
         self.obs_transforms = get_active_obs_transforms(self.config)
         self._observation_space = apply_obs_transforms_obs_space(

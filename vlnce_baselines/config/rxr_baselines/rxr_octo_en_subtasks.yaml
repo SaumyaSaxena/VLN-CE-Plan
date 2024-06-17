@@ -13,7 +13,7 @@ wandb:
   entity: iam-lab
   group: octo_subtasks
   project: vlnce_plan
-  name: subtasks_discreteAH_wind1_horizon1_half_data_finetune_vision
+  name: subtasks_discrete_wind1_horizon1_frozen_vision_half_data
   saver:
     upload: True
     save_top_k: 5
@@ -76,8 +76,8 @@ RL:
           depth: (256, 256)
 
 IL:
-  batch_size: 150
-  epochs: 15
+  batch_size: 300
+  epochs: 20
   inflection_weight_coef: 1.9
   load_from_ckpt: False
   ckpt_to_load: outputs/rxr_octo_en_subtasks/2024_01_12-14_46_50/checkpoints/ckpt.14.pth
@@ -98,7 +98,7 @@ train:
       lr: 2.5e-4
       eps: 1.0e-8
     AdamW:
-      lr: 2.5e-4
+      lr: 1.0e-5
       eps: 1.0e-8
       weight_decay: 0.01
 

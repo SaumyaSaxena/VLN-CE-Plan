@@ -208,8 +208,8 @@ image_encoder_kwargs:
         output_size: 128
         backbone: "resnet50"
         ddppo_checkpoint: "data/ddppo-models/gibson-2plus-resnet50.pth"
-        trainable: True
+        trainable: False
       RGB_ENCODER:
         cnn_type: "TorchVisionResNet50"
         output_size: 256
-        trainable: True
+        trainable: False
